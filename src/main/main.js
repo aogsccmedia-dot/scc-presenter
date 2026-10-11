@@ -103,9 +103,13 @@ function createControl() {
 // Used by the release pipeline: install the app, start it with --smoke-test, and only publish if it opens cleanly.
 function smokeTest(win) {
   const errors = [];
-  const fail = (why) => { console.error(`SMOKE FAIL: ${why}`); app.exit(1); };
+  const log = (line) => { console.log(line); if (process.env.SCC_SMOKE_LOG) try { fs.appendFileSync(process.env.SCC_SMOKE_LOG, line + "\n"); } catch { /* ignore */ } };
+  const fail = (why) => { log(`SMOKE FAIL: ${why}`); app.exit(1); };
   const timer = setTimeout(() => fail("timed out"), 60000);
-  win.webContents.on("console-message", (_e, level, message) => { if (level >= 3) errors.push(message); });
+  log(`SMOKE START ${process.platform} ${app.getVersion()}`);
+  win.webContents.on("console-message", (_e, level, message, line, source) => { if (level >= 3) errors.push(`${message} (${source}:${line})`); });
+  win.webContents.on("did-fail-load", (_e, code, desc, url) => fail(`load failed ${code} ${desc} ${url}`));
+  win.webContents.on("preload-error", (_e, p, err) => fail(`preload error ${err?.message}`));
   win.webContents.on("render-process-gone", (_e, d) => fail(`renderer gone: ${d.reason}`));
   win.webContents.once("did-finish-load", async () => {
     await new Promise((r) => setTimeout(r, 4000));
@@ -117,7 +121,7 @@ function smokeTest(win) {
     const outOk = await output.webContents.executeJavaScript("!!document.querySelector('.scc-canvas')").catch(() => false);
     if (!outOk) return fail("output did not render");
     clearTimeout(timer);
-    console.log(`SMOKE OK ${app.getVersion()} server=${serverInfo.ok}`);
+    log(`SMOKE OK ${app.getVersion()} server=${serverInfo.ok}`);
     app.isQuitting = true; app.exit(0);
   });
 }
