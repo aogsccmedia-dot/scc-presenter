@@ -64,3 +64,23 @@ export function importPlainText(text, fallbackTitle = "New song") {
   const { sections, arrangement } = dedupeSections(parseLyrics(body));
   return { id: uid(), title, author: "", ccli: "", sections, arrangement, source: "Text" };
 }
+
+/** OpenLyrics without a DOM (used by the background importer in the main process). */
+export function importOpenLyricsText(xml) {
+  const text = String(xml || "");
+  if (!/<song[\s>]/i.test(text)) throw new Error("This doesn't look like an OpenLyrics song.");
+  const decode = (s) => s.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_m, n) => String.fromCharCode(Number(n))).replace(/&amp;/g, "&");
+  const tag = (name) => { const m = new RegExp(`<${name}[^>]*>([\\s\\S]*?)</${name}>`, "i").exec(text); return m ? decode(m[1]).trim() : ""; };
+  const title = tag("title") || "Imported song";
+  const authors = [...text.matchAll(/<author[^>]*>([\s\S]*?)<\/author>/gi)].map((m) => decode(m[1]).trim()).filter(Boolean).join(", ");
+  const LABELS = { v: "Verse", c: "Chorus", b: "Bridge", p: "Pre-chorus", e: "Ending", i: "Intro", o: "Outro" };
+  const named = (n) => { const m = /^([a-z])(\d*)([a-z]?)$/i.exec(n || ""); return m ? `${LABELS[m[1].toLowerCase()] || "Verse"}${m[2] ? ` ${m[2]}` : ""}` : n || null; };
+  const sections = [...text.matchAll(/<verse\b([^>]*)>([\s\S]*?)<\/verse>/gi)].map((m) => {
+    const key = /name="([^"]*)"/i.exec(m[1])?.[1] || "";
+    const lines = [...m[2].matchAll(/<lines\b[^>]*>([\s\S]*?)<\/lines>/gi)].map((l) => decode(l[1]).split("\n").map((x) => x.trim()).join("\n")).join("\n");
+    return { key, label: named(key), text: lines.trim() };
+  }).filter((s) => s.text);
+  const order = tag("verseOrder");
+  const arrangement = order ? order.split(/\s+/).map((k) => sections.findIndex((s) => s.key === k)).filter((i) => i >= 0) : sections.map((_, i) => i);
+  return { id: uid(), title, author: authors, ccli: tag("ccliNo"), sections: sections.map(({ label, text: t }) => ({ label, text: t })), arrangement: arrangement.length ? arrangement : sections.map((_, i) => i), source: "OpenLyrics" };
+}

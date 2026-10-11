@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss: https:; font-src 'self' data:">
+<title>SCC Presenter – Live desk</title>
+<link rel="stylesheet" href="/control/control.css">
+<link rel="stylesheet" href="/live/live.css">
+</head>
+<body class="booting desk-body">
+<header class="topbar desk-top">
+  <div class="brand"><span class="mark">SCC</span><span class="name">Live desk</span></div>
+  <nav class="desk-tabs" role="tablist">
+    <button data-tab="atem" class="on"><i class="led" id="ledAtem"></i>ATEM</button>
+    <button data-tab="obs"><i class="led" id="ledObs"></i>OBS Studio</button>
+    <button data-tab="studio"><i class="led" id="ledStudio"></i>Cameras &amp; stream</button>
+  </nav>
+  <div class="actions">
+    <label class="move">Show on<select id="moveTo" aria-label="Move the live desk to a screen"></select></label>
+    <button class="tbtn" id="btnHelp">Help</button>
+  </div>
+</header>
+<main id="desk">
+  <section data-pane="atem" class="pane"></section>
+  <section data-pane="obs" class="pane" hidden></section>
+  <section data-pane="studio" class="pane" hidden></section>
+</main>
+<div class="boot" id="boot"><div class="mark big">SCC</div><div class="boot-name">Live desk</div></div>
+<script type="module" src="/live/live.js"></script>
+</body>
+</html>

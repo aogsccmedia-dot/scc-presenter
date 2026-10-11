@@ -11,9 +11,10 @@ import { createBible } from "./bible.js";
 import { createAI } from "./ai.js";
 import { createUpdates } from "./updates.js";
 import { createServer, lanAddresses } from "./server.js";
+import { createImporter } from "./importer.js";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const ROUTES = { "/shared/": path.join(SRC, "shared"), "/control/": path.join(SRC, "renderer", "control"), "/web/": path.join(SRC, "renderer", "web") };
+const ROUTES = { "/shared/": path.join(SRC, "shared"), "/control/": path.join(SRC, "renderer", "control"), "/web/": path.join(SRC, "renderer", "web"), "/live/": path.join(SRC, "renderer", "live") };
 const PAGES = { "/output": "web/output.html", "/stage": "web/stage.html" };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml", ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime", ".m4v": "video/mp4", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".woff2": "font/woff2" };
 const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i, VIDEO = /\.(mp4|webm|mov|m4v|mkv)$/i, AUDIO = /\.(mp3|wav|ogg|m4a|aac|flac)$/i;
@@ -30,8 +31,9 @@ if (process.argv.includes("--safe-graphics")) app.disableHardwareAcceleration();
 
 protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }]);
 
-let store, bible, ai, updates, server, serverInfo = { ok: false };
-let control = null, output = null, stage = null;
+let store, bible, ai, updates, server, atem, importer, serverInfo = { ok: false };
+let control = null, liveDesk = null, netKeyWin = null;
+const outWins = new Map();   // output id → window
 let remoteView = { title: "", index: -1, slides: [] };
 let live = {
   slide: null, next: null, themeId: "classic", themes: [], background: { type: "theme" }, blackout: false, clear: false, logo: false, logoSrc: null,
@@ -73,7 +75,8 @@ async function handleApp(request) {
 // ── Live state: one source of truth sent to every screen ─────────────────────────────────────────
 function broadcast() {
   live.version++;
-  for (const w of [control, output, stage]) if (w && !w.isDestroyed()) w.webContents.send("live:state", live);
+  for (const w of [control, liveDesk, netKeyWin, ...outWins.values()]) if (w && !w.isDestroyed()) w.webContents.send("live:state", live);
+  atem?.onLive(live);
   server?.broadcast(live);
 }
 function setLive(patch) { live = { ...live, ...patch }; broadcast(); return live; }
@@ -90,7 +93,7 @@ function createControl() {
   if (process.argv.includes("--smoke-test")) smokeTest(control);
   control.once("ready-to-show", () => { control.maximize(); control.show(); });
   control.on("close", (e) => {
-    if (output && !output.isDestroyed() && !app.isQuitting) {
+    if ([...outWins.values()].some((w) => !w.isDestroyed()) && !app.isQuitting) {
       const r = dialog.showMessageBoxSync(control, { type: "question", buttons: ["Quit", "Cancel"], defaultId: 1, cancelId: 1, message: "Quit SCC Presenter?", detail: "The projector output is still showing." });
       if (r === 1) { e.preventDefault(); return; }
     }
@@ -115,13 +118,20 @@ function smokeTest(win) {
     await new Promise((r) => setTimeout(r, 4000));
     const ready = await win.webContents.executeJavaScript("!document.body.classList.contains('booting') && !!document.querySelector('#slides')").catch(() => false);
     if (!ready || errors.length) return fail(errors.join(" | ") || "control screen did not finish loading");
-    const out = openScreen("output", null);
+    const out = openOutputs("output");
     await new Promise((r) => setTimeout(r, 2500));
-    if (!out?.ok || !output || output.isDestroyed()) return fail("output window did not open");
-    const outOk = await output.webContents.executeJavaScript("!!document.querySelector('.scc-canvas')").catch(() => false);
+    const first = [...outWins.values()][0];
+    if (!out?.ok || !first || first.isDestroyed()) return fail("output window did not open");
+    const outOk = await first.webContents.executeJavaScript("!!document.querySelector('.scc-canvas')").catch(() => false);
     if (!outOk) return fail("output did not render");
+    openLiveDesk();
+    await new Promise((r) => setTimeout(r, 2500));
+    const deskOk = await liveDesk?.webContents.executeJavaScript("!!document.querySelector('#desk') && !document.body.classList.contains('booting')").catch(() => false);
+    if (!deskOk) return fail("live desk did not open");
+    const atemErr = atem?.get()?.error || "";
+    if (/couldn't start/.test(atemErr)) return fail(atemErr);
     clearTimeout(timer);
-    log(`SMOKE OK ${app.getVersion()} server=${serverInfo.ok}`);
+    log(`SMOKE OK ${app.getVersion()} server=${serverInfo.ok} outputs=${outWins.size} desk=ok atem=ready`);
     app.isQuitting = true; app.exit(0);
   });
 }
@@ -140,24 +150,43 @@ function displayList() {
     hz: Math.round(d.displayFrequency || 0) || null, colorDepth: d.colorDepth, rotation: d.rotation, bounds: d.bounds,
   }));
 }
-function pickDisplay(id, preferExternal) {
+// ── Outputs: any number of screens, each with its own content (see shared/modes.js) ─────────────────
+const DEFAULT_OUTPUTS = [
+  { id: "main", name: "Projector", mode: "full", displayId: null, enabled: true },
+  { id: "stage", name: "Stage screen", mode: "stage", displayId: null, enabled: true },
+];
+export function outputsConfig() {
+  const list = store.read("settings").outputs;
+  return Array.isArray(list) && list.length ? list : DEFAULT_OUTPUTS;
+}
+/** Screens without a chosen display get the external screens in order (never the laptop's own screen if avoidable). */
+function assignDisplays(list) {
   const all = screen.getAllDisplays(), primary = screen.getPrimaryDisplay();
-  return all.find((d) => d.id === id) || (preferExternal ? all.find((d) => d.id !== primary.id) : null) || null;
+  const external = all.filter((d) => d.id !== primary.id);
+  const used = new Set(list.map((o) => o.displayId).filter(Boolean));
+  let k = 0;
+  return list.map((o) => {
+    if (o.displayId && all.some((d) => d.id === o.displayId)) return { ...o, display: all.find((d) => d.id === o.displayId) };
+    while (k < external.length && used.has(external[k].id)) k++;
+    const d = external[k++] || null;
+    return { ...o, display: d };
+  });
 }
 
-function openScreen(kind, displayId) {
-  const existing = kind === "output" ? output : stage;
-  if (existing && !existing.isDestroyed()) { existing.close(); }
-  const d = pickDisplay(displayId, true);
+function openOutputWindow(o) {
+  outWins.get(o.id)?.destroy();
+  const d = o.display;
   const windowed = !d || d.id === screen.getPrimaryDisplay().id;
   const b = (d || screen.getPrimaryDisplay()).workArea;
+  const n = outWins.size;
+  const page = o.mode === "stage" ? "stage" : `output?mode=${encodeURIComponent(o.mode || "full")}`;
   const win = new BrowserWindow({
-    x: windowed ? b.x + b.width - 660 : d.bounds.x, y: windowed ? b.y + 40 : d.bounds.y, width: windowed ? 640 : d.bounds.width, height: windowed ? 360 : d.bounds.height,
-    frame: windowed, fullscreen: !windowed && process.platform !== "darwin", backgroundColor: "#000000", title: kind === "output" ? "SCC Presenter – Output" : "SCC Presenter – Stage",
+    x: windowed ? b.x + b.width - 660 - n * 30 : d.bounds.x, y: windowed ? b.y + 40 + n * 30 : d.bounds.y, width: windowed ? 640 : d.bounds.width, height: windowed ? 360 : d.bounds.height,
+    frame: windowed, fullscreen: !windowed && process.platform !== "darwin", backgroundColor: o.mode === "green" ? "#00b140" : "#000000", title: `SCC Presenter – ${o.name}`,
     autoHideMenuBar: true, show: false, skipTaskbar: !windowed, webPreferences: { ...webPrefs, backgroundThrottling: false },
   });
   if (windowed) win.setAspectRatio(16 / 9);
-  win.loadURL(`app://local/${kind}`);
+  win.loadURL(`app://local/${page}`);
   win.once("ready-to-show", () => {
     // macOS: simple full screen avoids a separate Space and the slide-in animation on the projector.
     if (!windowed && process.platform === "darwin") win.setSimpleFullScreen(true);
@@ -165,13 +194,92 @@ function openScreen(kind, displayId) {
     win.showInactive();
     win.webContents.send("live:state", live);
   });
-  win.on("closed", () => { if (kind === "output") output = null; else stage = null; notifyScreens(); });
+  win.on("closed", () => { if (outWins.get(o.id) === win) outWins.delete(o.id); notifyScreens(); });
   lockNavigation(win);
-  if (kind === "output") output = win; else stage = win;
-  notifyScreens();
-  return { ok: true, windowed };
+  outWins.set(o.id, win);
+  return windowed;
 }
-function notifyScreens() { control?.webContents.send("screens", { output: !!output && !output.isDestroyed(), stage: !!stage && !stage.isDestroyed(), displays: displayList() }); }
+
+/** kind "output" = every enabled non-stage output; "stage" = stage outputs; or a single output id. */
+function openOutputs(kind) {
+  const list = assignDisplays(outputsConfig().filter((o) => o.enabled !== false));
+  const pick = list.filter((o) => kind === "stage" ? o.mode === "stage" : kind === "output" ? o.mode !== "stage" : o.id === kind);
+  let windowed = false;
+  for (const o of pick) windowed = openOutputWindow(o) || windowed;
+  notifyScreens();
+  return { ok: pick.length > 0, windowed, count: pick.length };
+}
+function closeOutputs(kind) {
+  const cfg = new Map(outputsConfig().map((o) => [o.id, o]));
+  for (const [id, w] of outWins) {
+    const mode = cfg.get(id)?.mode;
+    if (kind === "output" ? mode !== "stage" : kind === "stage" ? mode === "stage" : id === kind) w.destroy();
+  }
+  notifyScreens();
+}
+function screensState() {
+  const cfg = outputsConfig();
+  const open = [...outWins.keys()];
+  const mode = (id) => cfg.find((o) => o.id === id)?.mode;
+  return {
+    output: open.some((id) => mode(id) !== "stage"), stage: open.some((id) => mode(id) === "stage"),
+    open, outputs: assignDisplays(cfg).map(({ display, ...o }) => ({ ...o, displayLabel: display ? (display.label || "Screen") : "Laptop window" })),
+    displays: displayList(),
+  };
+}
+function notifyScreens() { control?.webContents.send("screens", screensState()); }
+
+// ── Live desk: ATEM, OBS, cameras and streaming in a window you can put on its own screen ─────────
+function openLiveDesk(displayId) {
+  if (liveDesk && !liveDesk.isDestroyed()) {
+    if (displayId) { const d = screen.getAllDisplays().find((x) => x.id === displayId); if (d) { liveDesk.setBounds(d.workArea); liveDesk.maximize(); } }
+    liveDesk.show(); liveDesk.focus(); return true;
+  }
+  const d = displayId ? screen.getAllDisplays().find((x) => x.id === displayId) : null;
+  liveDesk = new BrowserWindow({
+    width: 1360, height: 860, minWidth: 980, minHeight: 640, show: false, backgroundColor: "#0b0d11", title: "SCC Presenter – Live desk",
+    ...(d ? { x: d.workArea.x, y: d.workArea.y } : {}), webPreferences: { ...webPrefs, backgroundThrottling: false },
+  });
+  liveDesk.loadURL("app://local/live/index.html");
+  liveDesk.once("ready-to-show", () => { if (d) liveDesk.maximize(); liveDesk.show(); });
+  liveDesk.on("closed", () => { liveDesk = null; control?.webContents.send("desk", false); });
+  lockNavigation(liveDesk);
+  control?.webContents.send("desk", true);
+  return true;
+}
+
+// ── Words for the ATEM media pool: an invisible 1080p window draws the slide with a transparent background ──
+let netKeyImage = null;
+function ensureNetKeyWin() {
+  if (netKeyWin && !netKeyWin.isDestroyed()) return netKeyWin;
+  netKeyWin = new BrowserWindow({ show: false, width: 1920, height: 1080, frame: false, transparent: true, useContentSize: true,
+    webPreferences: { ...webPrefs, offscreen: true, backgroundThrottling: false } });
+  netKeyWin.webContents.setFrameRate(10);
+  netKeyWin.webContents.on("paint", (_e, _dirty, image) => { netKeyImage = image; });
+  netKeyWin.loadURL("app://local/output?transparent=1&still=1&sound=0");
+  netKeyWin.webContents.once("did-finish-load", () => netKeyWin?.webContents.send("live:state", live));
+  netKeyWin.on("closed", () => { netKeyWin = null; });
+  return netKeyWin;
+}
+async function captureWords(width, height) {
+  const win = ensureNetKeyWin();
+  win.webContents.send("live:state", live);
+  await new Promise((r) => setTimeout(r, 180));
+  win.webContents.invalidate();
+  await new Promise((r) => setTimeout(r, 120));
+  let img = netKeyImage;
+  if (!img || img.isEmpty()) return null;
+  const sz = img.getSize();
+  if (sz.width !== width || sz.height !== height) img = img.resize({ width, height, quality: "best" });
+  const bgra = img.toBitmap();
+  const rgba = Buffer.allocUnsafe(bgra.length);
+  for (let i = 0; i < bgra.length; i += 4) { rgba[i] = bgra[i + 2]; rgba[i + 1] = bgra[i + 1]; rgba[i + 2] = bgra[i]; rgba[i + 3] = bgra[i + 3]; }
+  return rgba;
+}
+
+// ── Recordings from the live desk are written straight to disk as they happen (nothing lost if the app closes) ──
+const recordings = new Map();
+function recordingsDir() { const d = path.join(app.getPath("videos"), "SCC Presenter"); fs.mkdirSync(d, { recursive: true }); return d; }
 
 // ── Show packages (.sccshow): a show plus its songs and media, for sharing ────────────────────────
 const MAX_EMBED = 60 * 1024 * 1024;
@@ -235,9 +343,47 @@ function registerIpc() {
   handle("live:set", (patch) => setLive(patch));
   handle("remote:view", (view) => { remoteView = view; return true; });
 
-  handle("screens:get", () => ({ output: !!output, stage: !!stage, displays: displayList() }));
-  handle("screens:open", (kind, displayId) => openScreen(kind === "stage" ? "stage" : "output", displayId));
-  handle("screens:close", (kind) => { const w = kind === "stage" ? stage : output; w?.close(); return true; });
+  handle("screens:get", () => screensState());
+  handle("screens:open", (kind) => openOutputs(kind || "output"));
+  handle("screens:close", (kind) => { closeOutputs(kind || "output"); return true; });
+  handle("outputs:set", (list) => {
+    const clean = (Array.isArray(list) ? list : []).slice(0, 8).map((o, i) => ({
+      id: String(o.id || `out${i}`).replace(/[^\w-]/g, "").slice(0, 20) || `out${i}`, name: String(o.name || `Output ${i + 1}`).slice(0, 40),
+      mode: ["full", "words", "green", "fill", "key", "visuals", "stage"].includes(o.mode) ? o.mode : "full",
+      displayId: o.displayId ? Number(o.displayId) : null, enabled: o.enabled !== false,
+    }));
+    store.write("settings", { ...store.read("settings"), outputs: clean });
+    // Re-open any outputs that are showing so changes apply straight away.
+    const open = [...outWins.keys()];
+    for (const id of open) { outWins.get(id)?.destroy(); outWins.delete(id); }
+    const assigned = assignDisplays(clean.filter((o) => o.enabled));
+    for (const o of assigned) if (open.includes(o.id)) openOutputWindow(o);
+    notifyScreens();
+    return screensState();
+  });
+  handle("desk:open", (displayId) => openLiveDesk(displayId ? Number(displayId) : null));
+  handle("atem:get", () => atem.get());
+  handle("atem:connect", (ip) => atem.connect(ip));
+  handle("atem:disconnect", () => atem.disconnect());
+  handle("atem:action", (a) => atem.action(a));
+  handle("atem:setupCable", (o) => atem.setupCableKey(o || {}));
+  handle("atem:setupNet", (o) => atem.setupNetKey(o || {}));
+  handle("atem:stopAuto", () => atem.stopAuto());
+  handle("rec:start", (ext) => {
+    const id = newId(), stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+    const file = path.join(recordingsDir(), `Service ${stamp}.${ext === "mp4" ? "mp4" : "webm"}`);
+    recordings.set(id, fs.createWriteStream(file)); recordings.get(id).path = file;
+    return { id, file };
+  });
+  handle("rec:chunk", (id, data) => { const w = recordings.get(id); if (w) w.write(Buffer.from(data)); return true; });
+  handle("rec:stop", (id) => new Promise((resolve) => { const w = recordings.get(id); if (!w) return resolve(null); recordings.delete(id); w.end(() => resolve(w.path)); }));
+  handle("rec:reveal", (file) => { if (file && file.startsWith(recordingsDir())) shell.showItemInFolder(file); else shell.openPath(recordingsDir()); return true; });
+  handle("import:start", (opts) => importer.start(opts || {}));
+  handle("import:get", () => importer.get());
+  handle("import:cancel", () => importer.cancel());
+  handle("import:freeshow", () => importer.findFreeShow());
+  handle("import:pickFolder", async () => { const r = await dialog.showOpenDialog(control, { title: "Choose a folder to import", properties: ["openDirectory", "multiSelections"] }); return r.canceled ? [] : r.filePaths; });
+  handle("import:pickFiles", async () => { const r = await dialog.showOpenDialog(control, { title: "Choose files to import", properties: ["openFile", "multiSelections"], filters: [{ name: "Songs and shows", extensions: ["show", "xml", "txt", "sccshow", "json"] }] }); return r.canceled ? [] : r.filePaths; });
   handle("screens:identify", () => {
     for (const [i, d] of screen.getAllDisplays().entries()) {
       const w = new BrowserWindow({ x: d.bounds.x + 40, y: d.bounds.y + 40, width: 260, height: 160, frame: false, alwaysOnTop: true, transparent: true, focusable: false, skipTaskbar: true });
@@ -363,6 +509,7 @@ function buildMenu() {
     { label: "Present", submenu: [
       { label: "Show output", accelerator: "CmdOrCtrl+Shift+O", click: send("toggle-output") },
       { label: "Show stage screen", accelerator: "CmdOrCtrl+Shift+S", click: send("toggle-stage") },
+      { label: "Live desk (ATEM, OBS, streaming)", accelerator: "CmdOrCtrl+L", click: () => openLiveDesk() },
       { type: "separator" },
       { label: "Clear all", accelerator: "Escape", registerAccelerator: false, click: send("clear-all") },
     ] },
@@ -377,7 +524,7 @@ function buildMenu() {
 }
 
 app.on("second-instance", () => { if (control) { if (control.isMinimized()) control.restore(); control.focus(); } });
-app.on("before-quit", () => { app.isQuitting = true; server?.close(); });
+app.on("before-quit", () => { app.isQuitting = true; server?.close(); importer?.pause(); for (const w of recordings.values()) w.end(); atem?.disconnect().catch(() => {}); });
 app.on("window-all-closed", () => app.quit());
 
 app.whenReady().then(async () => {
@@ -391,6 +538,22 @@ app.whenReady().then(async () => {
   if (!settings.remotePin) store.write("settings", { ...settings, remotePin: String(crypto.randomInt(1000, 9999)) });
   live = { ...live, themeId: settings.themeId || "classic", logoSrc: settings.logoSrc || null, themes: settings.customThemes || [] };
 
+  const sendDesk = (ch) => (data) => { if (liveDesk && !liveDesk.isDestroyed()) liveDesk.webContents.send(ch, data); };
+  // ATEM support loads on its own, so a problem with it can never stop the rest of the app from starting.
+  let createAtem;
+  try { ({ createAtem } = await import("./atem.js")); }
+  catch (e) {
+    const why = `ATEM support couldn't start on this computer (${e?.message || e}).`;
+    createAtem = () => ({ connect: async () => { throw new Error(why); }, disconnect: async () => {}, action: async () => { throw new Error(why); }, setupCableKey: async () => { throw new Error(why); },
+      setupNetKey: async () => { throw new Error(why); }, stopAuto: async () => {}, onLive: () => {}, get: () => ({ connected: false, status: "off", error: why }) });
+  }
+  atem = createAtem({
+    send: (st) => { sendDesk("atem")(st); control?.webContents.send("atem", st); },
+    getSettings: () => store.read("settings"),
+    setSettings: (patch) => store.write("settings", { ...store.read("settings"), ...patch }),
+    captureWords,
+  });
+  importer = createImporter({ dir, store, importPackage, send: (p) => control?.webContents.send("import", p) });
   protocol.handle("app", handleApp);
   // Only the app's own pages may list speakers/microphones, pick a speaker or use the clipboard. Everything else is refused.
   const ALLOWED = new Set(["media", "speaker-selection", "clipboard-read", "clipboard-sanitized-write", "fullscreen"]);
@@ -415,9 +578,12 @@ app.whenReady().then(async () => {
   screen.on("display-added", notifyScreens);
   screen.on("display-removed", () => {
     // If the projector is unplugged, close its window instead of leaving it on the laptop screen.
-    for (const w of [output, stage]) if (w && !w.isDestroyed() && !screen.getAllDisplays().some((d) => { const b = w.getBounds(); return b.x >= d.bounds.x && b.x < d.bounds.x + d.bounds.width; })) w.close();
+    for (const w of outWins.values()) if (!w.isDestroyed() && !screen.getAllDisplays().some((d) => { const b = w.getBounds(); return b.x >= d.bounds.x && b.x < d.bounds.x + d.bounds.width; })) w.close();
     notifyScreens();
   });
   if (settings.autoUpdate !== false && app.isPackaged) setTimeout(() => updates.check(), 8000);
+  // Reconnect to the ATEM used last time, and finish any import that was interrupted.
+  if (settings.atem?.ip && !process.argv.includes("--smoke-test")) setTimeout(() => atem.connect(settings.atem.ip).catch(() => {}), 2500);
+  control?.webContents.once("did-finish-load", () => setTimeout(() => importer.resume(), 1500));
 });
 

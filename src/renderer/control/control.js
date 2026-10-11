@@ -5,7 +5,7 @@ import { songSlides } from "../shared/lyrics.js";
 import { scriptureSlides, parseReference, formatReference } from "../shared/scripture.js";
 import { importFreeShow, importOpenLyrics, importPlainText, newId } from "../shared/importers.js";
 import { h, icon, toast, modal, modalOpen, confirmBox, askText, debounce, plural } from "./ui.js";
-import { openSongEditor, openTextEditor, openSettings, openConnect, openAI, openReceive, openShortcuts, openSetup, openFeedback, openGuide } from "./dialogs.js";
+import { openSongEditor, openTextEditor, openSettings, openConnect, openAI, openReceive, openShortcuts, openSetup, openFeedback, openGuide, openImport, onImportProgress } from "./dialogs.js";
 import { syncSound } from "./sound.js";
 import { MOTION } from "../shared/render.js";
 import { SOUND_PRESETS, KEYS } from "../web/audio.js";
@@ -549,7 +549,7 @@ export async function importSongFiles(files) {
   if (n) toast(`Imported ${plural(n, "song")}`, "ok");
   if (errors.length) toast(`Couldn't import ${errors.length}: ${errors.slice(0, 2).join("; ")}`, "error", 6000);
 }
-export async function importSongs() { const files = await scc.files.open("songs"); if (files.length) importSongFiles(files); }
+export async function importSongs() { openImport(); }
 
 // ── Text items ────────────────────────────────────────────────────────────────────────────────
 async function newTextItem(opts = {}) {
@@ -606,8 +606,9 @@ export async function importShowText(text) {
 export async function toggleScreen(kind) {
   const on = kind === "output" ? S.screens.output : S.screens.stage;
   if (on) return scc.screens.close(kind);
-  const r = await scc.screens.open(kind, kind === "output" ? S.settings.outputDisplay : S.settings.stageDisplay);
-  if (r?.windowed) toast(`${kind === "output" ? "Output" : "Stage screen"} opened in a window. Plug in a projector or TV and choose it in Settings → Screens.`, "info", 5200);
+  const r = await scc.screens.open(kind);
+  if (!r?.count) return toast(kind === "stage" ? "No stage screen is set up. Add one in Settings → Screens." : "All outputs are switched off. Turn one on in Settings → Screens.", "info", 5000);
+  if (r?.windowed) toast(`${kind === "output" ? "Output" : "Stage screen"} opened in a window. Plug in a projector or TV and it goes full screen there.`, "info", 5200);
 }
 
 function refreshBackground() {
@@ -739,7 +740,7 @@ async function refreshDevices() {
   const st = $("setupChip");
   const nOut = d.outputs.filter((o) => o.id !== "default" && o.id !== "communications").length || d.outputs.length;
   const nScr = S.screens.displays.length;
-  if (st) st.querySelector("span").textContent = `${nScr} ${nScr === 1 ? "screen" : "screens"}${nOut ? ` · ${nOut} ${nOut === 1 ? "speaker" : "speakers"}` : ""}`;
+  if (st) { st.querySelector("span").textContent = `${nScr} ${nScr === 1 ? "screen" : "screens"}`; st.title = `${nScr} screens · ${nOut} speakers — screens, speakers and this computer`; }
   renderSound();
 }
 function renderSound() {
@@ -812,6 +813,12 @@ async function start() {
   $("btnPrev").addEventListener("click", () => step(-1));
   $("btnSettings").addEventListener("click", () => openSettings());
   $("setupChip").addEventListener("click", () => openSetup());
+  $("btnLive").addEventListener("click", () => scc.desk.open());
+  $("importChip").addEventListener("click", () => openImport());
+  scc.importer.onProgress((p) => onImportProgress(p));
+  scc.importer.get().then((p) => onImportProgress(p)).catch(() => {});
+  scc.desk.onChange((open) => $("btnLive").classList.toggle("on", !!open));
+  scc.atem.onState?.((a) => $("btnLive").classList.toggle("live", a?.streaming?.state === "streaming"));
   $("btnFeedback").addEventListener("click", () => openFeedback());
   $("btnConnect").addEventListener("click", () => openConnect());
   $("btnAI").addEventListener("click", () => openAI());

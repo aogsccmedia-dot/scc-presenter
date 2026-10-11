@@ -31,5 +31,12 @@ contextBridge.exposeInMainWorld("scc", {
   server: { info: () => call("server:info"), newPin: () => call("server:newPin") },
   app: { info: () => call("app:info"), system: () => call("app:system"), open: (url) => call("app:open", url), openData: () => call("app:openData") },
   beta: { feedback: (d) => call("beta:feedback", d) },
+  outputs: { set: (list) => call("outputs:set", list) },
+  desk: { open: (displayId) => call("desk:open", displayId), onChange: on("desk") },
+  atem: { get: () => call("atem:get"), connect: (ip) => call("atem:connect", ip), disconnect: () => call("atem:disconnect"), action: (a) => call("atem:action", a),
+    setupCable: (o) => call("atem:setupCable", o), setupNet: (o) => call("atem:setupNet", o), stopAuto: () => call("atem:stopAuto"), onState: on("atem") },
+  rec: { start: (ext) => call("rec:start", ext), chunk: (id, data) => call("rec:chunk", id, data), stop: (id) => call("rec:stop", id), reveal: (f) => call("rec:reveal", f) },
+  importer: { start: (o) => call("import:start", o), get: () => call("import:get"), cancel: () => call("import:cancel"), freeshow: () => call("import:freeshow"),
+    pickFolder: () => call("import:pickFolder"), pickFiles: () => call("import:pickFiles"), onProgress: on("import") },
   onMenu: on("menu"),
 });

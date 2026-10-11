@@ -4,6 +4,7 @@ import { THEMES } from "../shared/themes.js";
 import { parseLyrics, dedupeSections, songSlides, songToText } from "../shared/lyrics.js";
 import { parseReference, formatReference, scriptureSlides } from "../shared/scripture.js";
 import { newId } from "../shared/importers.js";
+import { OUTPUT_MODES } from "../shared/modes.js";
 import { h, icon, toast, modal, debounce, plural } from "./ui.js";
 import { S, scc, mediaUrl, reload, renderLook, renderCenter, renderPreviews, newSong, toggleScreen, importShowText, listDevices, applyModes, BETA_END } from "./control.js";
 
@@ -158,18 +159,7 @@ export async function openSettings(startPane = "general") {
       checkbox("Loop videos when shown as a slide", !!S.settings.loopVideos, (v) => set({ loopVideos: v })),
       checkbox("Check for updates automatically", S.settings.autoUpdate !== false, (v) => set({ autoUpdate: v })),
       h("div.field", h("span", "Your library"), h("div", { style: { display: "flex", gap: "8px" } }, h("button.btn.small", { onclick: () => scc.app.openData() }, "Open library folder")), h("small", "Songs, services and settings are stored on this computer. Back up this folder to keep them safe."))),
-    screens: () => {
-      const disp = S.screens.displays || [];
-      const opts = [["", "Automatic (second screen)"], ...disp.map((d, i) => [String(d.id), `${i + 1}. ${d.label}${d.primary ? " (main)" : ""} · ${d.width}×${d.height}`])];
-      return h("div.pane",
-        h("label.field", h("span", "Projector / TV output"), sel(opts, S.settings.outputDisplay ? String(S.settings.outputDisplay) : "", (v) => set({ outputDisplay: v ? Number(v) : null }))),
-        h("label.field", h("span", "Stage screen"), sel(opts, S.settings.stageDisplay ? String(S.settings.stageDisplay) : "", (v) => set({ stageDisplay: v ? Number(v) : null }))),
-        h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
-          h("button.btn.small", { onclick: () => scc.screens.identify() }, "Identify screens"),
-          h("button.btn.small", { onclick: () => toggleScreen("output") }, S.screens.output ? "Close output" : "Open output"),
-          h("button.btn.small", { onclick: () => toggleScreen("stage") }, S.screens.stage ? "Close stage screen" : "Open stage screen")),
-        h("div.callout", disp.length > 1 ? `${disp.length} screens connected.` : "Only one screen found. The output opens in a small window until you connect a projector or TV."));
-    },
+    screens: () => outputsEditor(),
     looks: () => themeEditor(set),
     ai: () => {
       const key = h("input.input", { type: "password", placeholder: aiStatus.hasKey ? "•••••••• (saved)" : "sk-ant-…", autocomplete: "off" });
@@ -341,7 +331,7 @@ export async function openSetup() {
   const [screens, dev, sys] = await Promise.all([scc.screens.get(), listDevices(), scc.app.system?.().catch(() => ({})) || {}]);
   const ds = screens.displays || [];
   const quality = (d) => { const w = d.pixelsWide || d.width; return w >= 3800 ? "4K" : w >= 2500 ? "QHD" : w >= 1900 ? "Full HD" : w >= 1270 ? "HD" : "Low"; };
-  const role = (d) => String(S.settings.outputDisplay) === String(d.id) ? "Output" : String(S.settings.stageDisplay) === String(d.id) ? "Stage" : d.primary ? "Control (this screen)" : "Free — auto output";
+  const role = (d) => { const o = (screens.outputs || []).filter((x) => x.enabled !== false && x.displayLabel === (d.label || "Screen")).map((x) => x.name); return o.length ? o.join(", ") : d.primary ? "Control (this screen)" : "Not used"; };
   const screenCards = ds.map((d, i) => {
     const ratio = d.width / d.height;
     return h(`div.dev${d.primary ? ".main" : ""}`,
@@ -420,4 +410,84 @@ export function openGuide() {
   const m = modal({ title: "Getting started", width: 520, body, actions: [{ label: "Skip" }, { label: "Next", kind: "primary", onClick: () => { if (i < steps.length - 1) { i++; draw(); return false; } } }] });
   const nextBtn = m.el.querySelector("footer .primary");
   draw();
+}
+
+
+// ── Screens: as many outputs as you have screens, each showing what it should ───────────────
+function outputsEditor() {
+  let list = (S.screens.outputs || []).map((o) => ({ ...o }));
+  const disp = S.screens.displays || [];
+  const box = h("div", { style: { display: "grid", gap: "8px" } });
+  const save = async () => { const r = await scc.outputs.set(list); S.screens = r; list = r.outputs.map((o) => ({ ...o })); draw(); };
+  const debSave = debounce(save, 400);
+  const draw = () => {
+    box.replaceChildren(...list.map((o, i) => {
+      const name = h("input.input", { value: o.name, maxlength: 40, oninput: (e) => { o.name = e.target.value; debSave(); } });
+      const mode = sel(Object.entries(OUTPUT_MODES).map(([k, m]) => [k, m.name]), o.mode, (v) => { o.mode = v; save(); });
+      const where = sel([["", "Automatic"], ...disp.map((d, k) => [String(d.id), `Screen ${k + 1}: ${d.label}${d.primary ? " (main)" : ""}`])], o.displayId ? String(o.displayId) : "", (v) => { o.displayId = v ? Number(v) : null; save(); });
+      const on = h("input", { type: "checkbox", checked: o.enabled !== false, title: "On", onchange: (e) => { o.enabled = e.target.checked; save(); } });
+      return h("div.out-row", name, mode, where, h("label.check.small", on, "On"),
+        h("button.icon-btn.danger", { title: "Remove", disabled: list.length < 2, onclick: () => { list.splice(i, 1); save(); } }, icon("trash")),
+        h("div.mode-hint", `${OUTPUT_MODES[o.mode]?.hint || ""}${o.displayLabel ? ` · now on: ${o.displayLabel}` : ""}`));
+    }));
+  };
+  draw();
+  return h("div.pane",
+    h("div.hint", `${disp.length} ${disp.length === 1 ? "screen" : "screens"} connected. Each output can show something different — for example the projector shows everything, a side TV only the visuals, and the ATEM gets the words on black to key over the cameras.`),
+    box,
+    h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
+      h("button.btn.small", { disabled: list.length >= 8, onclick: () => { list.push({ id: `out${Date.now().toString(36)}`, name: `Output ${list.length + 1}`, mode: "full", displayId: null, enabled: true }); save(); } }, icon("plus"), "Add output"),
+      h("button.btn.small", { onclick: () => scc.screens.identify() }, "Show numbers on screens"),
+      h("button.btn.small", { onclick: () => toggleScreen("output") }, S.screens.output ? "Close outputs" : "Open outputs")),
+    h("small.hint", "For OBS, vMix or a smart TV you can also use the network links in Connect, e.g. /output?mode=words or ?mode=green."));
+}
+
+// ── Import assistant ─────────────────────────────────────────────────────────────────────────
+let importView = null, lastImport = { status: "idle" };
+export function onImportProgress(p) {
+  const prev = lastImport; lastImport = p || { status: "idle" };
+  const chip = document.getElementById("importChip");
+  if (chip) {
+    chip.hidden = p.status !== "running";
+    if (p.status === "running") chip.querySelector("span:last-child").textContent = `Importing ${p.done} / ${p.total}`;
+  }
+  if (p.status === "running" && p.resumed && !prev.resumed && prev.status !== "running") toast(`Carrying on with your import (${p.done} of ${p.total}).`, "info", 5000);
+  if (p.status === "done" && prev.status === "running") {
+    reload(["songs", "shows"]);
+    toast(`Import finished: ${plural(p.imported, "song")} added${p.skipped ? `, ${p.skipped} already in your library` : ""}${p.failed ? `, ${p.failed} couldn't be read` : ""}.`, p.failed ? "info" : "ok", 7000);
+  } else if (p.status === "running" && p.done % 100 < 25 && p.done !== prev.done) reload(["songs"]);
+  importView?.(p);
+}
+
+export async function openImport() {
+  const fsInfo = await scc.importer.freeshow().catch(() => ({ folders: [], shows: 0 }));
+  const body = h("div", { style: { display: "grid", gap: "12px" } });
+  const start = async (opts) => {
+    try { const v = await scc.importer.start(opts); onImportProgress(v); }
+    catch (e) { toast(e.message, "error", 6000); }
+  };
+  const progressView = (p) => {
+    const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+    return h("div", { style: { display: "grid", gap: "10px" } },
+      h("div", h("b", p.status === "done" ? "Import finished" : p.status === "cancelled" ? "Import stopped" : `Importing ${p.label || ""}…`)),
+      h("div.progress", h("i", { style: { width: `${pct}%` } })),
+      h("div.hint", `${p.done} of ${p.total} files · ${p.imported} added · ${p.skipped} already in your library · ${p.failed} couldn't be read`),
+      p.current && p.status === "running" ? h("div.hint", `Now: ${p.current}`) : null,
+      p.status === "running" ? h("div.callout", "You can keep working — this carries on in the background. If SCC Presenter or the computer closes, it continues from where it stopped next time.") : null,
+      p.failures?.length && p.status !== "running" ? h("details", h("summary.hint", "Files that couldn't be read"), h("div.hint", ...p.failures.map((f) => h("div", `${f.file}: ${f.error}`)))) : null,
+      h("div", { style: { display: "flex", gap: "8px" } },
+        p.status === "running" ? h("button.btn.small", { onclick: () => scc.importer.cancel() }, "Stop import") : h("button.btn.small", { onclick: () => draw({ status: "idle" }) }, "Import more")));
+  };
+  const chooser = () => h("div.imp-cards",
+    h("button.imp-card", { disabled: !fsInfo.folders.length, onclick: () => start({ folders: fsInfo.folders.slice(0, 1), label: "from FreeShow" }) }, icon("download"),
+      h("div", h("b", fsInfo.folders.length ? `Everything from FreeShow (${fsInfo.shows} songs found)` : "From FreeShow"), h("span", fsInfo.folders.length ? fsInfo.folders[0] : "FreeShow wasn't found on this computer. Use “A folder” and choose FreeShow's Shows folder."))),
+    h("button.imp-card", { onclick: async () => { const f = await scc.importer.pickFolder(); if (f.length) start({ folders: f, label: "from your folder" }); } }, icon("list"),
+      h("div", h("b", "A folder (and everything inside it)"), h("span", "FreeShow .show, OpenLP / OpenLyrics .xml, text .txt and shared .sccshow files"))),
+    h("button.imp-card", { onclick: async () => { const f = await scc.importer.pickFiles(); if (f.length) start({ files: f, label: "your files" }); } }, icon("music"),
+      h("div", h("b", "Some files"), h("span", "Pick one or many song files"))),
+    h("div.hint", "OpenLP: File → Export → Song → OpenLyrics, then import that folder here. Songs already in your library are skipped, so it's safe to run again."));
+  const draw = (p) => body.replaceChildren(p && p.status !== "idle" ? progressView(p) : chooser());
+  importView = (p) => { if (body.isConnected) draw(p); };
+  modal({ title: "Import songs", width: 600, body, actions: [{ label: "Close", kind: "primary" }], onClose: () => { importView = null; } });
+  draw(lastImport.status === "running" ? lastImport : { status: "idle" });
 }

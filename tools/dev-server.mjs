@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "src");
-const ROUTES = { "/shared/": path.join(SRC, "shared"), "/control/": path.join(SRC, "renderer", "control"), "/web/": path.join(SRC, "renderer", "web") };
+const ROUTES = { "/shared/": path.join(SRC, "shared"), "/control/": path.join(SRC, "renderer", "control"), "/web/": path.join(SRC, "renderer", "web"), "/live/": path.join(SRC, "renderer", "live") };
 const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png" };
 const port = Number(process.env.PORT || 5173);
 

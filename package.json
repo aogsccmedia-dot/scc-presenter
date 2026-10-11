@@ -1,7 +1,7 @@
 {
   "name": "scc-presenter",
   "productName": "SCC Presenter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Free, open-source presentation software for churches: songs, scripture, media and live output. By AOG Sandton City Church.",
   "author": "AOG Sandton City Church",
   "license": "MIT",
@@ -16,7 +16,8 @@
     "release": "electron-builder --publish always"
   },
   "dependencies": {
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "atem-connection": "3.10.3"
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -104,7 +105,11 @@
         "height": 380
       }
     },
-    "afterSign": "build/after-sign.cjs"
+    "afterSign": "build/after-sign.cjs",
+    "npmRebuild": false,
+    "asarUnpack": [
+      "**/*.node"
+    ]
   },
   "engines": {
     "node": ">=20"

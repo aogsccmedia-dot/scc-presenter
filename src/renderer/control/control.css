@@ -280,3 +280,20 @@ body.light *{transition:none!important;animation:none!important}
 }
 @media (max-height:760px){.left{grid-template-rows:minmax(130px,36%) minmax(0,1fr)}.right{gap:8px;padding:8px}.stage-tools,.sound{padding:6px 8px}}
 .tbtn .beta-tag{display:inline-block!important}
+
+.live-btn .led-dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+.live-btn.on .led-dot{background:var(--ok)}
+.live-btn.live{border-color:var(--live)}.live-btn.live .led-dot{background:var(--live);animation:pulse 1.4s ease-in-out infinite}
+.import-chip{border-color:#22385c;background:#16233a}
+.spin-dot{width:12px;height:12px;border-radius:50%;border:2px solid #9ec5ff;border-right-color:transparent;animation:spin .8s linear infinite}
+.progress{height:10px;border-radius:99px;background:var(--panel2);overflow:hidden;border:1px solid var(--line)}
+.progress i{display:block;height:100%;background:linear-gradient(90deg,var(--gold),var(--gold2));transition:width .3s ease}
+.imp-cards{display:grid;gap:10px}
+.imp-card{display:flex;gap:12px;align-items:center;padding:14px;border:1px solid var(--line2);border-radius:12px;background:var(--panel2);text-align:left}
+.imp-card:hover{border-color:var(--gold)}
+.imp-card b{display:block;font-size:14.5px}
+.imp-card span{color:var(--muted);font-size:12.5px}
+.imp-card .ic{width:24px;height:24px;color:var(--gold)}
+.out-row{display:grid;grid-template-columns:minmax(110px,1fr) minmax(170px,1.6fr) minmax(150px,1.3fr) auto auto;gap:8px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
+.out-row .mode-hint{grid-column:1/-1;font-size:11.5px;color:var(--faint);margin-top:-2px}
+.tbtn,.qbtn,.pill{white-space:nowrap}
