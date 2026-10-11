@@ -13,7 +13,8 @@
     "test": "node --test test/*.test.js",
     "ui": "node tools/dev-server.mjs",
     "dist": "electron-builder --publish never",
-    "release": "electron-builder --publish always"
+    "release": "electron-builder --publish always",
+    "postinstall": "node tools/shim-freetype.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.3.9",
@@ -106,10 +107,7 @@
       }
     },
     "afterSign": "build/after-sign.cjs",
-    "npmRebuild": false,
-    "asarUnpack": [
-      "**/*.node"
-    ]
+    "npmRebuild": false
   },
   "engines": {
     "node": ">=20"
