@@ -1,50 +1,56 @@
 name: Release
-# Push a tag like v0.1.0 (matching package.json) to build the Windows installer and Mac app and publish them.
+# Bump "version" in package.json and push to main: this builds the Windows installer and the Mac app,
+# installs and opens both on real machines, and only then publishes release v<version>.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths: [package.json]
   workflow_dispatch:
-    inputs:
-      tag: { description: "Existing tag to (re)build, e.g. v0.1.0", required: true }
 permissions:
   contents: write
-concurrency: release-${{ github.ref }}
-env:
-  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+concurrency: release
 jobs:
   test:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      skip: ${{ steps.v.outputs.skip }}
     steps:
       - uses: actions/checkout@v4
-        with: { ref: "${{ env.TAG }}" }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: node --test test/*.test.js
-      - name: Version matches tag
-        run: test "v$(node -p "require('./package.json').version")" = "$TAG"
+      - id: v
+        name: Is this version new?
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          TAG="v$(node -p "require('./package.json').version")"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if gh release view "$TAG" --repo "${{ github.repository }}" --json isDraft --jq '.isDraft' 2>/dev/null | grep -qx false; then echo "skip=true" >> "$GITHUB_OUTPUT"; echo "$TAG already published"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
 
   draft:
     needs: test
+    if: needs.test.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    env: { TAG: "${{ needs.test.outputs.tag }}" }
     steps:
       - uses: actions/checkout@v4
-        with: { ref: "${{ env.TAG }}" }
       - name: Create draft release
         env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then echo "Release exists"; exit 0; fi
-          gh release create "$TAG" --draft --title "SCC Presenter ${TAG#v}" --notes-file RELEASE_NOTES.md
+          gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "SCC Presenter ${TAG#v} (Beta)" --notes-file RELEASE_NOTES.md
 
   build:
-    needs: draft
+    needs: [test, draft]
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env: { TAG: "${{ needs.test.outputs.tag }}" }
     steps:
       - uses: actions/checkout@v4
-        with: { ref: "${{ env.TAG }}" }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm install --no-audit --no-fund
@@ -88,8 +94,9 @@ jobs:
           gh release upload "$TAG" $FILES --clobber --repo "${{ github.repository }}"
 
   publish:
-    needs: build
+    needs: [test, build]
     runs-on: ubuntu-latest
+    env: { TAG: "${{ needs.test.outputs.tag }}" }
     steps:
       - name: Publish release
         env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", GH_REPO: "${{ github.repository }}" }
