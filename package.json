@@ -1,0 +1,112 @@
+{
+  "name": "scc-presenter",
+  "productName": "SCC Presenter",
+  "version": "0.1.0",
+  "description": "Free, open-source presentation software for churches: songs, scripture, media and live output. By AOG Sandton City Church.",
+  "author": "AOG Sandton City Church",
+  "license": "MIT",
+  "homepage": "https://aogsccyouth.com/presenter",
+  "type": "module",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "ui": "node tools/dev-server.mjs",
+    "dist": "electron-builder --publish never",
+    "release": "electron-builder --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.aogscc.presenter",
+    "productName": "SCC Presenter",
+    "copyright": "\u00a9 AOG Sandton City Church. Open source under the MIT licence.",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "build/icon.png",
+      "package.json",
+      "LICENSE"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "aogsccmedia-dot",
+        "repo": "scc-presenter",
+        "releaseType": "draft"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "SCC-Presenter-Setup.${ext}",
+      "publisherName": "AOG Sandton City Church"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "SCC Presenter",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
+      "artifactName": "SCC-Presenter.${ext}",
+      "hardenedRuntime": false,
+      "identity": null,
+      "extendInfo": {
+        "NSCameraUsageDescription": "Not used.",
+        "NSMicrophoneUsageDescription": "Not used."
+      }
+    },
+    "dmg": {
+      "title": "SCC Presenter",
+      "contents": [
+        {
+          "x": 150,
+          "y": 190
+        },
+        {
+          "x": 410,
+          "y": 190,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 560,
+        "height": 380
+      }
+    },
+    "afterSign": "build/after-sign.cjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

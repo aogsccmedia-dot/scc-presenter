@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'">
+<title>SCC Presenter – Stage</title>
+<link rel="stylesheet" href="/web/stage.css">
+</head>
+<body>
+<header><span id="clock">--:--</span><span id="title"></span><span id="timer"></span></header>
+<main>
+  <section class="now"><div class="label" id="nowLabel">Now</div><div class="text" id="now"></div></section>
+  <section class="next"><div class="label" id="nextLabel">Next</div><div class="text" id="next"></div></section>
+</main>
+<div id="message" hidden></div>
+<script type="module" src="/web/stage.js"></script>
+</body>
+</html>

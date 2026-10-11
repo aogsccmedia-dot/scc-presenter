@@ -1,0 +1,15 @@
+:root{color-scheme:dark}
+html,body{margin:0;height:100%;background:#000;color:#fff;font-family:Inter,"Segoe UI",system-ui,sans-serif;overflow:hidden}
+body{display:grid;grid-template-rows:auto 1fr}
+header{display:flex;justify-content:space-between;align-items:center;padding:1.2vh 2.5vw;font-size:4.2vh;font-weight:700;background:#111;border-bottom:1px solid #222}
+#title{font-size:2.6vh;color:#9aa3b2;font-weight:600;max-width:50vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#timer{color:#7ee2a8;min-width:6ch;text-align:right}#timer.over{color:#ff6b6b}
+main{display:grid;grid-template-rows:62% 38%;min-height:0}
+section{padding:2vh 3vw;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.next{background:#0c0c0c;border-top:1px solid #222}
+.label{font-size:2.2vh;letter-spacing:.12em;text-transform:uppercase;color:#f5b942;font-weight:700;margin-bottom:1vh}
+.next .label{color:#6d7686}
+.text{white-space:pre-wrap;font-weight:700;line-height:1.15;font-size:7vh;overflow:hidden}
+.next .text{font-size:4.6vh;color:#b5bccb}
+#message{position:fixed;left:0;right:0;bottom:0;background:#f5b942;color:#000;font-size:5vh;font-weight:800;text-align:center;padding:1.5vh 2vw}
+html[data-offline] header{background:#4a1515}
