@@ -5,7 +5,10 @@ import { songSlides } from "../shared/lyrics.js";
 import { scriptureSlides, parseReference, formatReference } from "../shared/scripture.js";
 import { importFreeShow, importOpenLyrics, importPlainText, newId } from "../shared/importers.js";
 import { h, icon, toast, modal, modalOpen, confirmBox, askText, debounce, plural } from "./ui.js";
-import { openSongEditor, openTextEditor, openSettings, openConnect, openAI, openReceive, openShortcuts } from "./dialogs.js";
+import { openSongEditor, openTextEditor, openSettings, openConnect, openAI, openReceive, openShortcuts, openSetup, openFeedback, openGuide } from "./dialogs.js";
+import { syncSound } from "./sound.js";
+import { MOTION } from "../shared/render.js";
+import { SOUND_PRESETS, KEYS } from "../web/audio.js";
 
 if (!window.scc) await import("./mock.js");   // lets the screen run in a normal browser for development
 const scc = window.scc;
@@ -78,6 +81,7 @@ const slideOut = (s) => s && ({ text: s.text || "", label: s.label || "", refere
 
 function backgroundFor(item, slide) {
   if (slide?.kind === "media" && slide.media && slide.media.type !== "audio") return { type: slide.media.type, src: slide.media.id, loop: slide.media.type === "image" ? true : !!S.settings.loopVideos, muted: false };
+  if (String(S.settings.backgroundId || "").startsWith("motion:")) return { type: "motion", preset: S.settings.backgroundId.slice(7) };
   const bg = S.settings.backgroundId && S.media.find((m) => m.id === S.settings.backgroundId);
   if (bg) return { type: bg.type, src: bg.id, loop: true, muted: true };
   return { type: "theme" };
@@ -159,8 +163,13 @@ function thumbState(slide) {
   const bg = backgroundFor(null, slide);
   return { slide: slide.kind === "media" ? null : slideOut(slide), themeId: S.live.themeId || S.settings.themeId, themes: S.settings.customThemes || [], background: bg };
 }
+// Slides are drawn only when they scroll into view, so long songs and big services stay fast on older laptops.
+const lazy = typeof IntersectionObserver !== "undefined" ? new IntersectionObserver((entries) => {
+  for (const e of entries) if (e.isIntersecting) { lazy.unobserve(e.target); const s = e.target._slide; delete e.target._slide; if (s) renderThumb(e.target, s); }
+}, { rootMargin: "300px" }) : null;
+function lazyThumb(el, slide) { if (!lazy) return requestAnimationFrame(() => renderThumb(el, slide)); el._slide = slide; lazy.observe(el); }
 export function renderThumb(host, slide) {
-  const v = createView(host, { mediaUrl, muted: true });
+  const v = createView(host, { mediaUrl, muted: true, calm: true });
   v.update(thumbState(slide));
   thumbViews.add(v);
   return v;
@@ -204,7 +213,7 @@ function renderCenter() {
       thumb.append(m.type === "image" ? h("img", { src: mediaUrl(m.id), alt: "", style: { width: "100%", height: "100%", objectFit: "cover" } })
         : m.type === "video" ? h("video", { src: mediaUrl(m.id) + "#t=1", muted: true, preload: "metadata", style: { width: "100%", height: "100%", objectFit: "cover" } })
           : h("div", { style: { display: "grid", placeItems: "center", height: "100%", color: "#8d96a7" } }, icon("volume"), h("span", { style: { marginTop: "6px" } }, "Audio — click to play")));
-    } else requestAnimationFrame(() => renderThumb(thumb, slide));
+    } else lazyThumb(thumb, slide);
   });
   renderLiveMarks();
 }
@@ -223,7 +232,7 @@ function scrollToLive() { document.querySelector("#slides .slide.live")?.scrollI
 let liveView, nextView;
 function renderPreviews() {
   liveView ||= createView($("livePreview"), { mediaUrl, muted: true, animate: true });
-  nextView ||= createView($("nextPreview"), { mediaUrl, muted: true });
+  nextView ||= createView($("nextPreview"), { mediaUrl, muted: true, calm: true });
   const base = { themeId: S.live.themeId || S.settings.themeId, themes: S.settings.customThemes || [], logoSrc: S.settings.logoSrc };
   liveView.update({ ...S.live, ...base });
   nextView.update({ ...base, slide: S.live.next, background: S.live.background });
@@ -266,7 +275,10 @@ function renderLook() {
   ts.replaceChildren(...[...(S.settings.customThemes || []), ...THEMES].map((t) => h("option", { value: t.id }, t.name)));
   ts.value = S.live.themeId || S.settings.themeId || "classic";
   const bs = $("bgSelect");
-  bs.replaceChildren(h("option", { value: "" }, "From the look"), ...S.media.filter((m) => m.type !== "audio").map((m) => h("option", { value: m.id }, `${m.type === "video" ? "▶ " : ""}${m.name}`)));
+  const mine = S.media.filter((m) => m.type !== "audio");
+  bs.replaceChildren(h("option", { value: "" }, "From the look"),
+    h("optgroup", { label: "Moving backgrounds" }, ...Object.entries(MOTION).map(([k, m]) => h("option", { value: `motion:${k}` }, m.name))),
+    mine.length ? h("optgroup", { label: "Your pictures & videos" }, ...mine.map((m) => h("option", { value: m.id }, `${m.type === "video" ? "▶ " : ""}${m.name}`))) : h("optgroup", { label: "Add pictures in Media" }));
   bs.value = S.settings.backgroundId || "";
 }
 
@@ -710,6 +722,75 @@ function renderAll() {
   if (S.selected?.type === "song") { const s = S.songs.find((x) => x.id === S.selected.songId); if (!s) S.selected = null; }
 }
 
+
+// ── Sound & music panel ─────────────────────────────────────────────────────────────────────
+let speakers = [];
+export async function listDevices() {
+  try {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    const name = (d, i, what) => d.label || `${what} ${i + 1}`;
+    const outs = all.filter((d) => d.kind === "audiooutput"), ins = all.filter((d) => d.kind === "audioinput"), cams = all.filter((d) => d.kind === "videoinput");
+    return { outputs: outs.map((d, i) => ({ id: d.deviceId, label: name(d, i, "Speaker") })), inputs: ins.map((d, i) => ({ id: d.deviceId, label: name(d, i, "Microphone") })), cameras: cams.map((d, i) => ({ id: d.deviceId, label: name(d, i, "Camera") })) };
+  } catch { return { outputs: [], inputs: [], cameras: [] }; }
+}
+async function refreshDevices() {
+  const d = await listDevices();
+  speakers = d.outputs;
+  const st = $("setupChip");
+  const nOut = d.outputs.filter((o) => o.id !== "default" && o.id !== "communications").length || d.outputs.length;
+  const nScr = S.screens.displays.length;
+  if (st) st.querySelector("span").textContent = `${nScr} ${nScr === 1 ? "screen" : "screens"}${nOut ? ` · ${nOut} ${nOut === 1 ? "speaker" : "speakers"}` : ""}`;
+  renderSound();
+}
+function renderSound() {
+  const box = $("soundPanel"); if (!box) return;
+  const pad = S.live.pad || null;
+  const sp = $("speakerSelect");
+  if (sp && document.activeElement !== sp) {
+    sp.replaceChildren(...(speakers.length ? speakers : [{ id: "", label: "Default speaker" }]).map((o) => h("option", { value: o.id === "default" ? "" : o.id }, o.label)));
+    sp.value = S.live.audioSink || "";
+  }
+  const ps = $("presetSelect"); if (ps && !ps.options.length) ps.replaceChildren(...Object.entries(SOUND_PRESETS).map(([k, v]) => h("option", { value: k }, v.name)));
+  if (ps) ps.value = S.live.soundPreset || "natural";
+  const ks = $("padKey"); if (ks && !ks.options.length) ks.replaceChildren(...KEYS.map((k) => h("option", { value: k }, `Key of ${k}`)));
+  if (ks && pad?.key) ks.value = pad.key;
+  const pb = $("btnPad"); if (pb) { pb.classList.toggle("on", !!pad?.key); pb.replaceChildren(icon(pad?.key ? "stop" : "play"), h("span", pad?.key ? "Stop pad" : "Play pad")); }
+  const pv = $("padVol"); if (pv && document.activeElement !== pv) pv.value = pad?.volume ?? S.settings.padVolume ?? 0.6;
+}
+function wireSound() {
+  const setLive = (patch) => { Object.assign(S.live, patch); scc.live.set(patch); renderSound(); };
+  $("speakerSelect").addEventListener("change", async (e) => { setLive({ audioSink: e.target.value }); S.settings = await scc.lib.setSettings({ audioSink: e.target.value }); });
+  $("presetSelect").addEventListener("change", async (e) => { setLive({ soundPreset: e.target.value }); S.settings = await scc.lib.setSettings({ soundPreset: e.target.value }); });
+  $("btnPad").addEventListener("click", () => {
+    const on = S.live.pad?.key;
+    setLive({ pad: on ? null : { key: $("padKey").value, volume: Number($("padVol").value), bright: $("padBright").checked } });
+  });
+  const upd = () => { if (S.live.pad?.key) setLive({ pad: { key: $("padKey").value, volume: Number($("padVol").value), bright: $("padBright").checked } }); };
+  $("padKey").addEventListener("change", upd);
+  $("padBright").addEventListener("change", upd);
+  $("padVol").addEventListener("input", debounce(() => { upd(); scc.lib.setSettings({ padVolume: Number($("padVol").value) }).then((x) => { S.settings = x; }); }, 80));
+  navigator.mediaDevices?.addEventListener?.("devicechange", refreshDevices);
+}
+
+// ── Easy mode, light mode, beta ─────────────────────────────────────────────────────────────
+export async function applyModes() {
+  document.body.classList.toggle("easy", !!S.settings.easy);
+  let light = S.settings.performance === "light";
+  if (!S.settings.performance || S.settings.performance === "auto") {
+    const sys = S.system || {};
+    light = (sys.cores && sys.cores <= 4) || (sys.memoryGB && sys.memoryGB <= 4.5);
+  }
+  document.body.classList.toggle("light", !!light);
+  if (!!S.live.calm !== !!light) { S.live.calm = !!light; scc.live.set({ calm: !!light }); }
+}
+export const BETA_END = new Date("2027-01-01T00:00:00+02:00");
+function renderBeta() {
+  const chip = $("btnFeedback"); if (!chip) return;
+  const ended = Date.now() >= BETA_END.getTime();
+  chip.title = ended ? "The beta has ended — the full release arrives on 31 January 2027" : "Tell us what works and what doesn't";
+  if (ended && !S.betaWarned) { S.betaWarned = true; toast("Thank you for testing! The beta ended on 31 December 2026. The full SCC Presenter arrives on 31 January 2027.", "info", 9000); }
+}
+
 // ── Start ─────────────────────────────────────────────────────────────────────────────────────
 async function start() {
   const info = await scc.app.info();
@@ -718,6 +799,9 @@ async function start() {
   S.translations = await scc.bible.translations().catch(() => []);
   S.live = await scc.live.get();
   S.screens = await scc.screens.get();
+  S.system = await scc.app.system?.().catch(() => null) || {};
+  if (S.settings.audioSink || S.settings.soundPreset) { const p = { audioSink: S.settings.audioSink || "", soundPreset: S.settings.soundPreset || "natural" }; Object.assign(S.live, p); scc.live.set(p); }
+  await applyModes();
 
   $("btnOutput").addEventListener("click", () => toggleScreen("output"));
   $("btnStage").addEventListener("click", () => toggleScreen("stage"));
@@ -727,6 +811,8 @@ async function start() {
   $("btnNext").addEventListener("click", () => step(1));
   $("btnPrev").addEventListener("click", () => step(-1));
   $("btnSettings").addEventListener("click", () => openSettings());
+  $("setupChip").addEventListener("click", () => openSetup());
+  $("btnFeedback").addEventListener("click", () => openFeedback());
   $("btnConnect").addEventListener("click", () => openConnect());
   $("btnAI").addEventListener("click", () => openAI());
   $("btnNewShow").addEventListener("click", newShow);
@@ -736,17 +822,18 @@ async function start() {
   $("bgSelect").addEventListener("change", async (e) => { S.settings = await scc.lib.setSettings({ backgroundId: e.target.value || null }); refreshBackground(); });
   for (const b of document.querySelectorAll(".tabs button")) b.addEventListener("click", () => { S.tab = b.dataset.tab; S.query = ""; renderLibrary(); });
 
-  scc.live.onState((st) => { S.live = st; renderQuick(); renderPreviews(); });
+  scc.live.onState((st) => { S.live = st; renderQuick(); renderPreviews(); syncSound(st, mediaUrl); renderSound(); });
   scc.screens.onChange((s) => { S.screens = s; renderQuick(); });
   scc.remote.onCommand(onRemote);
   scc.updates.onStatus(renderUpdate);
   scc.onMenu(onMenu);
   scc.updates.get().then(renderUpdate).catch(() => {});
 
-  wireServiceDnD(); wireKeys(); wireFileDrop(); wireStageTools();
+  wireServiceDnD(); wireKeys(); wireFileDrop(); wireStageTools(); wireSound(); refreshDevices(); renderBeta();
+  scc.screens.onChange(() => refreshDevices());
   renderAll(); renderCenter(); tickTimer();
   document.body.classList.remove("booting");
-  if (!S.songs.length && !S.settings.welcomed) { scc.lib.setSettings({ welcomed: true }).then((s) => { S.settings = s; }); }
+  if (!S.settings.welcomed) { S.settings = await scc.lib.setSettings({ welcomed: true }); openGuide(); }
 }
 
 export function remember(ref) {

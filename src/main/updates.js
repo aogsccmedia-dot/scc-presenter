@@ -6,7 +6,7 @@ import updaterPkg from "electron-updater";
 
 const { autoUpdater } = updaterPkg;
 const REPO = "aogsccmedia-dot/scc-presenter";
-export const RELEASES_URL = `https://github.com/${REPO}/releases/latest`;
+export const RELEASES_URL = "https://aogsccyouth.com/presenter";
 
 export function newer(a, b) {
   const pa = String(a).replace(/^v/, "").split(/[.-]/).map((n) => parseInt(n, 10) || 0);
@@ -23,6 +23,7 @@ export function createUpdates(send) {
   if (selfUpdating) {
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.allowPrerelease = true; // beta builds are published as pre-releases
     autoUpdater.on("checking-for-update", () => set({ status: "checking", message: "Checking for updates…" }));
     autoUpdater.on("update-available", (i) => set({ status: "downloading", latest: i.version, message: `Downloading version ${i.version}…` }));
     autoUpdater.on("update-not-available", () => set({ status: "current", message: "You have the latest version." }));
@@ -35,9 +36,9 @@ export function createUpdates(send) {
     if (selfUpdating) { try { await autoUpdater.checkForUpdates(); } catch { set({ status: "error", message: "Couldn't check for updates right now." }); } return state; }
     set({ status: "checking", message: "Checking for updates…" });
     try {
-      const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: { accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(10000) });
+      const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=5`, { headers: { accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(10000) });
       if (!res.ok) throw new Error();
-      const rel = await res.json();
+      const rel = (await res.json()).find((r) => !r.draft) || {};
       const latest = String(rel.tag_name || "").replace(/^v/, "");
       if (latest && newer(latest, app.getVersion())) set({ status: "available", latest, message: `Version ${latest} is available.` });
       else set({ status: "current", latest, message: "You have the latest version." });

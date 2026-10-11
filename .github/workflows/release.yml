@@ -49,11 +49,43 @@ jobs:
         with: { node-version: 22 }
       - run: npm install --no-audit --no-fund
       - run: node --test test/*.test.js
-      - name: Build and upload
+      - name: Build
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx electron-builder --publish always
+        run: npx electron-builder --publish never
+
+      # Install the real installer and open the app before anything is published.
+      - name: Install and open (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist\SCC-Presenter-Setup.exe" -ArgumentList "/S" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Installer exited with $($p.ExitCode)" }
+          $exe = Join-Path $env:LOCALAPPDATA "Programs\SCC Presenter\SCC Presenter.exe"
+          if (-not (Test-Path $exe)) { $exe = (Get-ChildItem -Path "$env:LOCALAPPDATA\Programs" -Recurse -Filter "SCC Presenter.exe" | Select-Object -First 1).FullName }
+          if (-not $exe) { throw "Installed app not found" }
+          $run = Start-Process -FilePath $exe -ArgumentList "--smoke-test" -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw "App smoke test failed ($($run.ExitCode))" }
+          Write-Host "Installed and opened OK: $exe"
+
+      - name: Install and open (Mac)
+        if: runner.os == 'macOS'
+        run: |
+          hdiutil attach dist/SCC-Presenter.dmg -nobrowse -mountpoint /Volumes/SCCP
+          cp -R "/Volumes/SCCP/SCC Presenter.app" /Applications/
+          hdiutil detach /Volumes/SCCP
+          codesign --verify --deep --verbose=1 "/Applications/SCC Presenter.app"
+          "/Applications/SCC Presenter.app/Contents/MacOS/SCC Presenter" --smoke-test
+          echo "Installed and opened OK"
+
+      - name: Upload to release
+        shell: bash
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then FILES="SCC-Presenter-Setup.exe SCC-Presenter-Setup.exe.blockmap latest.yml"; else FILES="SCC-Presenter.dmg SCC-Presenter.dmg.blockmap latest-mac.yml"; fi
+          ls -la $FILES
+          gh release upload "$TAG" $FILES --clobber --repo "${{ github.repository }}"
 
   publish:
     needs: build
@@ -62,5 +94,8 @@ jobs:
       - name: Publish release
         env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", GH_REPO: "${{ github.repository }}" }
         run: |
-          gh release view "$TAG" --json assets --jq '.assets[].name'
-          gh release edit "$TAG" --draft=false --latest
+          names=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          echo "$names"
+          for f in SCC-Presenter-Setup.exe latest.yml SCC-Presenter.dmg; do echo "$names" | grep -qx "$f" || { echo "Missing $f"; exit 1; }; done
+          PRE=""; case "$TAG" in *-*|v0.*) PRE="--prerelease";; esac
+          gh release edit "$TAG" --draft=false $PRE

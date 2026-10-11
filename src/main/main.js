@@ -1,8 +1,9 @@
 // SCC Presenter — main process. Created by AOG Sandton City Church. Free and open source (MIT).
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, screen, session, shell } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import os from "node:os";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { createStore } from "./store.js";
@@ -19,6 +20,14 @@ const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i, VIDEO = /\.(mp4|webm|mov|m4v|m
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
+// Smooth playback on modest hardware: use the graphics card for video and drawing, and never pause the output.
+app.commandLine.appendSwitch("enable-gpu-rasterization");
+app.commandLine.appendSwitch("enable-zero-copy");
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("enable-features", "PlatformHEVCDecoderSupport");
+if (process.argv.includes("--safe-graphics")) app.disableHardwareAcceleration();
+
 protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }]);
 
 let store, bible, ai, updates, server, serverInfo = { ok: false };
@@ -78,6 +87,7 @@ function createControl() {
     icon: path.join(SRC, "..", "build", "icon.png"), titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default", webPreferences: webPrefs,
   });
   control.loadURL("app://local/control/index.html");
+  if (process.argv.includes("--smoke-test")) smokeTest(control);
   control.once("ready-to-show", () => { control.maximize(); control.show(); });
   control.on("close", (e) => {
     if (output && !output.isDestroyed() && !app.isQuitting) {
@@ -90,6 +100,28 @@ function createControl() {
   lockNavigation(control);
 }
 
+// Used by the release pipeline: install the app, start it with --smoke-test, and only publish if it opens cleanly.
+function smokeTest(win) {
+  const errors = [];
+  const fail = (why) => { console.error(`SMOKE FAIL: ${why}`); app.exit(1); };
+  const timer = setTimeout(() => fail("timed out"), 60000);
+  win.webContents.on("console-message", (_e, level, message) => { if (level >= 3) errors.push(message); });
+  win.webContents.on("render-process-gone", (_e, d) => fail(`renderer gone: ${d.reason}`));
+  win.webContents.once("did-finish-load", async () => {
+    await new Promise((r) => setTimeout(r, 4000));
+    const ready = await win.webContents.executeJavaScript("!document.body.classList.contains('booting') && !!document.querySelector('#slides')").catch(() => false);
+    if (!ready || errors.length) return fail(errors.join(" | ") || "control screen did not finish loading");
+    const out = openScreen("output", null);
+    await new Promise((r) => setTimeout(r, 2500));
+    if (!out?.ok || !output || output.isDestroyed()) return fail("output window did not open");
+    const outOk = await output.webContents.executeJavaScript("!!document.querySelector('.scc-canvas')").catch(() => false);
+    if (!outOk) return fail("output did not render");
+    clearTimeout(timer);
+    console.log(`SMOKE OK ${app.getVersion()} server=${serverInfo.ok}`);
+    app.isQuitting = true; app.exit(0);
+  });
+}
+
 function lockNavigation(win) {
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https:\/\//.test(url)) shell.openExternal(url); return { action: "deny" }; });
   win.webContents.on("will-navigate", (e, url) => { if (!url.startsWith("app://local/")) e.preventDefault(); });
@@ -97,7 +129,12 @@ function lockNavigation(win) {
 
 function displayList() {
   const primary = screen.getPrimaryDisplay().id;
-  return screen.getAllDisplays().map((d, i) => ({ id: d.id, label: d.label || `Display ${i + 1}`, primary: d.id === primary, width: d.size.width, height: d.size.height, bounds: d.bounds }));
+  return screen.getAllDisplays().map((d, i) => ({
+    id: d.id, label: d.label || `Display ${i + 1}`, primary: d.id === primary, internal: !!d.internal,
+    width: d.size.width, height: d.size.height, scale: d.scaleFactor,
+    pixelsWide: Math.round(d.size.width * d.scaleFactor), pixelsHigh: Math.round(d.size.height * d.scaleFactor),
+    hz: Math.round(d.displayFrequency || 0) || null, colorDepth: d.colorDepth, rotation: d.rotation, bounds: d.bounds,
+  }));
 }
 function pickDisplay(id, preferExternal) {
   const all = screen.getAllDisplays(), primary = screen.getPrimaryDisplay();
@@ -276,6 +313,28 @@ function registerIpc() {
   });
   handle("server:newPin", () => { const pin = String(crypto.randomInt(1000, 9999)); store.write("settings", { ...store.read("settings"), remotePin: pin }); return pin; });
 
+  handle("beta:feedback", async (data) => {
+    const res = await fetch("https://aogsccyouth.com/api/presenter/feedback", {
+      method: "POST", headers: { "content-type": "application/json", "user-agent": `SCC-Presenter/${app.getVersion()}` },
+      body: JSON.stringify({ ...data, version: app.getVersion(), platform: process.platform }), signal: AbortSignal.timeout(20000),
+    }).catch(() => null);
+    if (!res) throw new Error("Couldn't send — check the internet connection and try again.");
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || "Couldn't send feedback right now.");
+    return true;
+  });
+  handle("app:system", async () => {
+    const gpu = await app.getGPUInfo("basic").catch(() => ({}));
+    const status = app.getGPUFeatureStatus();
+    const cpus = os.cpus();
+    return {
+      os: `${{ win32: "Windows", darwin: "macOS", linux: "Linux" }[process.platform] || process.platform} ${os.release()}`, arch: process.arch,
+      cpu: cpus[0]?.model?.replace(/\s+/g, " ").trim() || "Unknown", cores: cpus.length,
+      memoryGB: Math.round(os.totalmem() / 1073741824 * 10) / 10, freeGB: Math.round(os.freemem() / 1073741824 * 10) / 10,
+      gpu: (gpu.gpuDevice || []).map((d) => ({ active: !!d.active, vendor: d.vendorId, device: d.deviceId, name: d.deviceString || null })),
+      videoDecode: status.video_decode, gpuCompositing: status.gpu_compositing, electron: process.versions.electron, version: app.getVersion(),
+    };
+  });
   handle("app:info", () => ({ version: app.getVersion(), platform: process.platform, data: app.getPath("userData") }));
   handle("app:open", (url) => { if (/^https:\/\//.test(url)) shell.openExternal(url); return true; });
   handle("app:openData", () => shell.openPath(app.getPath("userData")));
@@ -307,7 +366,7 @@ function buildMenu() {
     { label: "Help", submenu: [
       { label: "Keyboard shortcuts", click: send("shortcuts") },
       { label: "Check for updates", click: send("updates") },
-      { label: "Release notes", click: () => shell.openExternal("https://github.com/aogsccmedia-dot/scc-presenter/releases") },
+      { label: "Release notes", click: () => shell.openExternal("https://aogsccyouth.com/presenter") },
     ] },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -329,6 +388,11 @@ app.whenReady().then(async () => {
   live = { ...live, themeId: settings.themeId || "classic", logoSrc: settings.logoSrc || null, themes: settings.customThemes || [] };
 
   protocol.handle("app", handleApp);
+  // Only the app's own pages may list speakers/microphones, pick a speaker or use the clipboard. Everything else is refused.
+  const ALLOWED = new Set(["media", "speaker-selection", "clipboard-read", "clipboard-sanitized-write", "fullscreen"]);
+  const own = (url) => String(url || "").startsWith("app://local");
+  session.defaultSession.setPermissionCheckHandler((_wc, perm, origin) => own(origin) && ALLOWED.has(perm));
+  session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(own(wc.getURL()) && ALLOWED.has(perm)));
   registerIpc();
   buildMenu();
   createControl();

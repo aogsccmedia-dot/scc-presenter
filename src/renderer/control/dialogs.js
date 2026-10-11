@@ -5,7 +5,7 @@ import { parseLyrics, dedupeSections, songSlides, songToText } from "../shared/l
 import { parseReference, formatReference, scriptureSlides } from "../shared/scripture.js";
 import { newId } from "../shared/importers.js";
 import { h, icon, toast, modal, debounce, plural } from "./ui.js";
-import { S, scc, mediaUrl, reload, renderLook, renderCenter, renderPreviews, newSong, toggleScreen, importShowText } from "./control.js";
+import { S, scc, mediaUrl, reload, renderLook, renderCenter, renderPreviews, newSong, toggleScreen, importShowText, listDevices, applyModes, BETA_END } from "./control.js";
 
 function previewList(host, slides) {
   host.replaceChildren();
@@ -150,6 +150,9 @@ export async function openSettings(startPane = "general") {
   const set = async (patch) => { S.settings = await scc.lib.setSettings(patch); };
   const panes = {
     general: () => h("div.pane",
+      checkbox("Easy mode — bigger text and buttons", !!S.settings.easy, async (v) => { await set({ easy: v }); applyModes(); }),
+      h("label.field", h("span", "Performance"), sel([["auto", "Automatic (recommended)"], ["light", "Light — for older computers (no animations)"], ["full", "Full — all animations"]], S.settings.performance || "auto", async (v) => { await set({ performance: v }); applyModes(); }),
+        h("small", "Light mode keeps slides and video smooth on older laptops.")),
       h("label.field", h("span", "Lines per slide for songs"), sel([2, 3, 4, 5, 6, 8].map((n) => [n, `${n} lines`]), S.settings.maxLines || 4, async (v) => { await set({ maxLines: Number(v) }); renderCenter(); })),
       h("label.field", h("span", "Bible translation"), sel(S.translations.map((t) => [t.id, t.name]), S.settings.translation || "kjv", (v) => set({ translation: v }))),
       checkbox("Loop videos when shown as a slide", !!S.settings.loopVideos, (v) => set({ loopVideos: v })),
@@ -194,7 +197,16 @@ export async function openSettings(startPane = "general") {
       h("p.muted", "Created by AOG Sandton City Church. Released under the MIT License — free to use, share and improve."),
       h("button.btn.small", { onclick: () => scc.app.open("https://github.com/aogsccmedia-dot/scc-presenter") }, "Source code")),
   };
-  const names = { general: "General", screens: "Screens", looks: "Looks", ai: "AI", network: "Network", updates: "Updates", about: "About" };
+  panes.beta = () => {
+    const key = h("input.input", { value: S.settings.betaKey || "", placeholder: "SCC-XXXX-XXXX", autocomplete: "off" });
+    return h("div.pane",
+      h("div.callout.gold", h("b", "Beta tester"), h("br"), `Thank you for testing SCC Presenter! The beta runs until 31 December 2026. The full release arrives on 31 January 2027.`),
+      h("label.field", h("span", "Your beta key"), key, h("small", "Shown on the download page after you joined the beta. It lets your feedback reach the team.")),
+      h("div", { style: { display: "flex", gap: "8px" } },
+        h("button.btn.small.primary", { onclick: async () => { await set({ betaKey: key.value.trim().toUpperCase() }); toast("Beta key saved", "ok"); } }, "Save key"),
+        h("button.btn.small", { onclick: () => openFeedback() }, "Send feedback")));
+  };
+  const names = { general: "General", beta: "Beta", screens: "Screens", looks: "Looks", ai: "AI", network: "Network", updates: "Updates", about: "About" };
   const pane = h("div");
   const nav = h("nav", ...Object.entries(names).map(([k, label]) => h("button", { dataset: { k }, onclick: () => show(k) }, label)));
   const show = (k) => { for (const b of nav.children) b.classList.toggle("on", b.dataset.k === k); pane.replaceChildren(panes[k]()); };
@@ -322,3 +334,90 @@ export function openShortcuts() {
 }
 
 export { renderPreviews, importShowText };
+
+
+// ── Setup: screens, sound devices and this computer ─────────────────────────────────────────
+export async function openSetup() {
+  const [screens, dev, sys] = await Promise.all([scc.screens.get(), listDevices(), scc.app.system?.().catch(() => ({})) || {}]);
+  const ds = screens.displays || [];
+  const quality = (d) => { const w = d.pixelsWide || d.width; return w >= 3800 ? "4K" : w >= 2500 ? "QHD" : w >= 1900 ? "Full HD" : w >= 1270 ? "HD" : "Low"; };
+  const role = (d) => String(S.settings.outputDisplay) === String(d.id) ? "Output" : String(S.settings.stageDisplay) === String(d.id) ? "Stage" : d.primary ? "Control (this screen)" : "Free — auto output";
+  const screenCards = ds.map((d, i) => {
+    const ratio = d.width / d.height;
+    return h(`div.dev${d.primary ? ".main" : ""}`,
+      h("div.screen-shape", { style: { aspectRatio: String(ratio) } }, String(i + 1)),
+      h("b", d.label || `Screen ${i + 1}`),
+      h("div", h("span.tag.ok", quality(d)), d.internal ? h("span.tag", "Built-in") : h("span.tag", "Connected"), d.primary ? h("span.tag.warn", "Main") : null),
+      h("div.spec", `${d.pixelsWide || d.width} × ${d.pixelsHigh || d.height} pixels`, h("br"), `${d.hz ? `${d.hz} Hz · ` : ""}${d.scale ? `${Math.round(d.scale * 100)}% scale · ` : ""}${d.colorDepth || 24}-bit colour`, h("br"), `Use: ${role(d)}`));
+  });
+  const list = (items, empty) => items.length ? h("div.results", { style: { maxHeight: "none" } }, ...items.map((x) => h("div.result", h("div.t", h("b", x.label)), x.extra || null))) : h("div.hint", empty);
+  const outs = dev.outputs.filter((o) => o.id !== "communications");
+  const lowEnd = (sys.cores && sys.cores <= 4) || (sys.memoryGB && sys.memoryGB <= 4.5);
+  const testTone = (id) => h("button.btn.small", { onclick: async () => {
+    try { const ctx = new AudioContext(); if (id && ctx.setSinkId) await ctx.setSinkId(id === "default" ? "" : id); const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = 523.25; g.gain.value = 0.08; o.connect(g).connect(ctx.destination); o.start(); g.gain.setTargetAtTime(0, ctx.currentTime + 0.6, 0.1); setTimeout(() => ctx.close(), 1200); } catch { toast("Couldn't play on that speaker.", "error"); }
+  } }, "Test");
+  modal({ title: "Setup", width: 820, body: h("div", { style: { display: "grid", gap: "12px" } },
+    h("div.section-title", `Screens (${ds.length})`),
+    h("div.dev-grid", ...screenCards),
+    h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } }, h("button.btn.small", { onclick: () => scc.screens.identify() }, "Show numbers on screens"), h("button.btn.small", { onclick: () => openSettings("screens") }, "Choose output & stage screens")),
+    h("div.section-title", `Speakers & sound outputs (${outs.length})`),
+    list(outs.map((o) => ({ label: o.label, extra: testTone(o.id) })), "No speakers found."),
+    h("div.section-title", `Microphones & inputs (${dev.inputs.length}) · Cameras (${dev.cameras.length})`),
+    list([...dev.inputs.map((i) => ({ label: `🎙 ${i.label}` })), ...dev.cameras.map((c) => ({ label: `📷 ${c.label}` }))], "No microphones or cameras found."),
+    h("div.section-title", "This computer"),
+    h("div.callout", `${sys.os || ""} · ${sys.cpu || ""} (${sys.cores || "?"} cores) · ${sys.memoryGB || "?"} GB memory`, h("br"),
+      `Graphics: ${(sys.gpu || []).find((g) => g.active)?.name || (sys.gpu?.length ? `${sys.gpu.length} graphics chip(s)` : "unknown")} · Video decoding: ${String(sys.videoDecode || "").startsWith("enabled") ? "hardware (smooth)" : "software"}`),
+    lowEnd ? h("div.callout.gold", "This is a lighter computer. Light mode is on automatically so slides and video stay smooth. Change it in Settings → General.") : null) ,
+    actions: [{ label: "Done", kind: "primary" }] });
+}
+
+// ── Feedback (beta testers) ────────────────────────────────────────────────────────────────
+export function openFeedback() {
+  const ended = Date.now() >= BETA_END.getTime();
+  const stars = (name) => { let v = 0; const row = h("div.stars", { dataset: { name } }); for (let i = 1; i <= 5; i++) row.append(h("button", { type: "button", "aria-label": `${i} of 5`, onclick: () => { v = i; [...row.children].forEach((b, k) => b.classList.toggle("on", k < i)); row.dataset.value = i; } }, "★")); return row; };
+  const overall = stars("overall"), ease = stars("ease");
+  const FEATURES = ["Songs", "Bible", "Pictures & video", "Stage screen", "Phone remote", "OBS / livestream", "Sharing shows", "AI helpers", "Sound & pads", "Moving backgrounds"];
+  const used = h("div.chips", ...FEATURES.map((f) => h("label.chip", h("input", { type: "checkbox", value: f, style: { marginRight: "5px" } }), f)));
+  const ta = (ph) => h("textarea", { rows: 3, placeholder: ph });
+  const good = ta("What worked well?"), bad = ta("What went wrong? Anything slow, confusing or broken? Steps help us fix it."), missing = ta("What's missing that you need on a Sunday?");
+  const rec = sel([["", "Choose…"], ["yes", "Yes"], ["maybe", "Maybe"], ["no", "Not yet"]], "", () => {});
+  const key = h("input.input", { value: S.settings.betaKey || "", placeholder: "Your beta key, e.g. SCC-AB12-CD34" });
+  const sysBox = h("input", { type: "checkbox", checked: true });
+  modal({ title: "Beta feedback", width: 640, body: ended ? h("div.callout", "The beta has ended. Thank you! The full release arrives on 31 January 2027.") : h("div", { style: { display: "grid", gap: "12px" } },
+    h("div.hint", "Your answers go straight to the AOG Sandton City Church media team. Only beta testers can send feedback."),
+    h("div.grid2", h("div.field", h("span", "Overall"), overall), h("div.field", h("span", "How easy is it to use?"), ease)),
+    h("div.field", h("span", "What did you use?"), used),
+    h("label.field", h("span", "Worked well"), good), h("label.field", h("span", "Problems"), bad), h("label.field", h("span", "Missing"), missing),
+    h("div.grid2", h("label.field", h("span", "Would you recommend it to another church?"), rec), h("label.field", h("span", "Beta key"), key)),
+    h("label.check", sysBox, h("span", "Include computer details (screens, memory, graphics) to help us fix problems"))),
+    actions: ended ? [{ label: "Close", kind: "primary" }] : [{ label: "Cancel" }, { label: "Send feedback", kind: "primary", onClick: async () => {
+      const k = key.value.trim().toUpperCase();
+      if (!k) { toast("Add your beta key (from the download page).", "error"); key.focus(); return false; }
+      if (!overall.dataset.value) { toast("Tap a star rating first.", "error"); return false; }
+      const sys = sysBox.checked ? { ...(await scc.app.system?.().catch(() => ({})) || {}), screens: (S.screens.displays || []).map((d) => `${d.pixelsWide || d.width}x${d.pixelsHigh || d.height}${d.hz ? `@${d.hz}` : ""}`) } : null;
+      await scc.beta.feedback({ key: k, overall: Number(overall.dataset.value), ease: Number(ease.dataset.value || 0), used: [...used.querySelectorAll("input:checked")].map((i) => i.value), good: good.value, problems: bad.value, missing: missing.value, recommend: rec.value, system: sys, source: "app" });
+      if (k !== S.settings.betaKey) S.settings = await scc.lib.setSettings({ betaKey: k });
+      toast("Thank you! Your feedback was sent.", "ok", 4000);
+    } }] });
+}
+
+// ── First-run guide ────────────────────────────────────────────────────────────────────────
+export function openGuide() {
+  const steps = [
+    ["monitor", "Welcome to SCC Presenter", "Show songs, Bible verses, pictures and videos on your projector or TV. This short guide takes 30 seconds."],
+    ["music", "1. Pick something on the left", "Songs, Bible, Media and Text are in the tabs at the bottom left. Click a song to see its slides in the middle."],
+    ["play", "2. Click a slide to show it", "The slide with the red border is on screen. Press → or Space for the next one. The big yellow Next button does the same."],
+    ["monitor", "3. Turn on the projector screen", "Press Output at the top. If a projector or TV is plugged in, the slides go there. Black, Clear and Logo are always one tap away."],
+    ["list", "4. Plan your service", "Press “Add to service” to build Sunday's order on the top left. Next then runs straight through the whole service."],
+  ];
+  let i = 0;
+  const body = h("div.guide");
+  const draw = () => {
+    const [ic, t, p] = steps[i];
+    body.replaceChildren(h("div.big-ic", icon(ic)), h("h3", t), h("p", p), h("div.dots", ...steps.map((_, k) => h(`i${k === i ? ".on" : ""}`))));
+    nextBtn.textContent = i === steps.length - 1 ? "Start presenting" : "Next";
+  };
+  const m = modal({ title: "Getting started", width: 520, body, actions: [{ label: "Skip" }, { label: "Next", kind: "primary", onClick: () => { if (i < steps.length - 1) { i++; draw(); return false; } } }] });
+  const nextBtn = m.el.querySelector("footer .primary");
+  draw();
+}

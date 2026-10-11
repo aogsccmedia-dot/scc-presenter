@@ -1,26 +1,27 @@
 import { createView } from "../shared/render.js";
 import { subscribe, mediaUrl } from "./live.js";
+import { attach, setSink, applyPreset } from "./audio.js";
 
 const params = new URLSearchParams(location.search);
 const transparent = params.get("transparent") === "1";
 const inApp = !!window.scc;
+// Video sound plays from the main output only; OBS/browser copies stay silent unless ?audio=1, so sound is never doubled.
+// Music, audio tracks and worship pads play from the control window, so they work even with no projector attached.
+const withSound = inApp || params.get("audio") === "1";
 if (transparent) document.documentElement.classList.add("transparent");
 
-const view = createView(document.getElementById("view"), { mediaUrl, animate: true, muted: !(inApp || params.get("audio") === "1") });
-let audio = null, audioKey = "", lastCmd = 0;
+const view = createView(document.getElementById("view"), { mediaUrl, animate: true, muted: !withSound });
+let lastCmd = 0, sink = null, preset = null;
 
-function video() { return document.querySelector(".scc-bg video"); }
+const video = () => document.querySelector(".scc-bg video");
 
 subscribe((state) => {
   view.update({ ...state, transparent });
-  // Audio tracks play only on the main output inside the app (never doubled on OBS pages).
-  if (inApp) {
-    const key = state.audio?.src ? `${state.audio.src}|${state.audio.startedAt}` : "";
-    if (key !== audioKey) {
-      audioKey = key; audio?.pause(); audio = null;
-      if (state.audio?.src) { audio = new Audio(mediaUrl(state.audio.src)); audio.loop = !!state.audio.loop; audio.volume = state.audio.volume ?? 1; audio.play().catch(() => {}); }
-    }
-    if (audio && state.audio) { audio.volume = state.audio.volume ?? 1; if (state.audio.paused && !audio.paused) audio.pause(); if (!state.audio.paused && audio.paused) audio.play().catch(() => {}); }
+  if (withSound) {
+    if (state.audioSink !== sink) { sink = state.audioSink ?? ""; setSink(sink); }
+    if (state.soundPreset !== preset) { preset = state.soundPreset || "natural"; applyPreset(preset); }
+    const v = video();
+    if (v && !v.muted) attach(v);
   }
   const cmd = state.videoCmd;
   if (cmd && cmd.at !== lastCmd) {

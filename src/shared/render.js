@@ -19,11 +19,53 @@ const CSS = `
 .scc-logo img{max-width:46%;max-height:46%;object-fit:contain}
 .scc-black{background:#000;transition:opacity .4s ease}
 .scc-hide{opacity:0;pointer-events:none}
+.scc-motion{position:absolute;inset:0;overflow:hidden}
+.scc-motion i{position:absolute;display:block;border-radius:50%;will-change:transform}
+.scc-calm .scc-motion i,.scc-calm .scc-motion{animation-play-state:paused!important}
+@keyframes scc-drift{0%{transform:translate(-8%,-6%) scale(1)}50%{transform:translate(8%,6%) scale(1.15)}100%{transform:translate(-8%,-6%) scale(1)}}
+@keyframes scc-rise{from{transform:translateY(0)}to{transform:translateY(-1300px)}}
+@keyframes scc-spin{to{transform:rotate(360deg)}}
+@keyframes scc-slide{from{transform:translateX(0)}to{transform:translateX(-50%)}}
 `;
 function injectCss(doc) {
   if (doc.getElementById("scc-render-css")) return;
   const s = doc.createElement("style"); s.id = "scc-render-css"; s.textContent = CSS; doc.head.appendChild(s);
 }
+
+export const MOTION = {
+  aurora: { name: "Aurora", base: "#06121f", colors: ["#1fb6a6", "#3b5bdb", "#8e44ad"] },
+  sunrise: { name: "Golden glow", base: "#1a0e02", colors: ["#f5b942", "#e8590c", "#c2255c"] },
+  bokeh: { name: "Soft lights", base: "#0b0b14", colors: ["#ffd27a", "#9ec5ff", "#ffffff"] },
+  rays: { name: "Light rays", base: "#0a0f1c", colors: ["#ffffff", "#9ec5ff"] },
+  embers: { name: "Embers", base: "#120604", colors: ["#ff922b", "#ffd43b"] },
+  waves: { name: "Ocean waves", base: "#04121c", colors: ["#1c7ed6", "#22b8cf", "#0b7285"] },
+};
+// Animated backgrounds made only of gradients moved with transform: smooth on any graphics chip, nothing to download.
+export function motionLayer(doc, preset) {
+  const p = MOTION[preset] || MOTION.aurora;
+  const root = doc.createElement("div"); root.className = "scc-motion"; root.style.background = p.base;
+  const rnd = mulberry(preset.length * 7919);
+  const add = (style) => { const i = doc.createElement("i"); Object.assign(i.style, style); root.appendChild(i); return i; };
+  if (preset === "rays") {
+    add({ inset: "-60%", borderRadius: "0", background: `repeating-conic-gradient(from 0deg at 50% 0%, ${p.colors[0]}14 0deg 6deg, transparent 6deg 18deg)`, animation: "scc-spin 120s linear infinite" });
+    add({ inset: "0", borderRadius: "0", background: `radial-gradient(ellipse at 50% -10%, ${p.colors[1]}55, transparent 60%)` });
+  } else if (preset === "waves") {
+    for (let k = 0; k < 3; k++) add({ left: "0", width: "200%", height: "60%", bottom: `${-10 + k * 8}%`, borderRadius: "0", opacity: String(0.35 + k * 0.15),
+      background: `radial-gradient(60% 40% at 25% 100%, ${p.colors[k]} 0, transparent 70%), radial-gradient(60% 40% at 75% 100%, ${p.colors[k]} 0, transparent 70%)`, animation: `scc-slide ${40 - k * 9}s linear infinite` });
+  } else if (preset === "bokeh" || preset === "embers") {
+    const n = preset === "bokeh" ? 18 : 40;
+    for (let k = 0; k < n; k++) {
+      const size = preset === "bokeh" ? 60 + rnd() * 180 : 4 + rnd() * 8, c = p.colors[k % p.colors.length];
+      add({ width: `${size}px`, height: `${size}px`, left: `${rnd() * 100}%`, top: `${100 + rnd() * 30}%`, opacity: String(preset === "bokeh" ? 0.12 + rnd() * 0.2 : 0.5 + rnd() * 0.5),
+        background: `radial-gradient(circle, ${c} 0, ${c}00 70%)`, animation: `scc-rise ${preset === "bokeh" ? 40 + rnd() * 40 : 14 + rnd() * 16}s linear ${-rnd() * 60}s infinite` });
+    }
+  } else {
+    p.colors.forEach((c, k) => add({ width: "90%", height: "90%", left: `${[-10, 30, 10][k]}%`, top: `${[-20, 10, 35][k]}%`, opacity: "0.55",
+      background: `radial-gradient(circle, ${c} 0, ${c}00 65%)`, animation: `scc-drift ${26 + k * 9}s ease-in-out ${-k * 7}s infinite` }));
+  }
+  return root;
+}
+function mulberry(a) { return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
 
 /** Scales the canvas to fit its frame (letterboxed). */
 function fit(frame, canvas) {
@@ -70,7 +112,7 @@ export function createView(host, opts = {}) {
 
   function setBackground(state, theme) {
     const b = state.background || {};
-    const key = state.transparent ? "transparent" : b.type === "image" || b.type === "video" ? `${b.type}:${b.src}` : `css:${bgCss(theme, b)}`;
+    const key = state.transparent ? "transparent" : b.type === "image" || b.type === "video" ? `${b.type}:${b.src}` : b.type === "motion" ? `motion:${b.preset}` : `css:${bgCss(theme, b)}`;
     if (key === bgKey) return; bgKey = key;
     bg.innerHTML = ""; bg.style.background = "";
     if (state.transparent) { bg.style.background = "transparent"; return; }
@@ -78,7 +120,8 @@ export function createView(host, opts = {}) {
     else if (b.type === "video" && b.src) {
       const v = doc.createElement("video"); v.src = mediaUrl(b.src); v.autoplay = true; v.loop = b.loop !== false; v.muted = opts.muted !== false || b.muted !== false; v.playsInline = true;
       bg.appendChild(v); v.play?.().catch(() => {});
-    } else bg.style.background = bgCss(theme, b);
+    } else if (b.type === "motion") bg.appendChild(motionLayer(doc, b.preset));
+    else bg.style.background = bgCss(theme, b);
   }
 
   function setText(state, theme) {
@@ -119,6 +162,7 @@ export function createView(host, opts = {}) {
     if (lk !== logoKey) { logoKey = lk; logo.innerHTML = ""; if (lk) { const i = doc.createElement("img"); i.src = mediaUrl(lk); i.alt = ""; logo.appendChild(i); } }
     logo.classList.toggle("scc-hide", !state.logo);
     black.classList.toggle("scc-hide", !state.blackout);
+    frame.classList.toggle("scc-calm", !!state.calm || !!opts.calm);
     fit(frame, canvas);
   }
   return { update, frame, destroy() { ro?.disconnect(); frame.remove(); } };

@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld("scc", {
   ai: { status: () => call("ai:status"), setKey: (k) => call("ai:setKey", k), tidy: (t) => call("ai:tidy", t), scriptures: (t) => call("ai:scriptures", t), sermon: (t) => call("ai:sermon", t) },
   updates: { check: () => call("updates:check"), get: () => call("updates:get"), install: () => call("updates:install"), onStatus: on("updates") },
   server: { info: () => call("server:info"), newPin: () => call("server:newPin") },
-  app: { info: () => call("app:info"), open: (url) => call("app:open", url), openData: () => call("app:openData") },
+  app: { info: () => call("app:info"), system: () => call("app:system"), open: (url) => call("app:open", url), openData: () => call("app:openData") },
+  beta: { feedback: (d) => call("beta:feedback", d) },
   onMenu: on("menu"),
 });

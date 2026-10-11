@@ -16,7 +16,7 @@ const db = load() || {
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { /* ignore */ } };
 const listeners = { live: new Set(), screens: new Set() };
 let live = { themeId: "classic", background: { type: "theme" }, blackout: false, clear: false, logo: false, item: {}, version: 0 };
-const screens = { output: false, stage: false, displays: [{ id: 1, label: "Built-in display", primary: true, width: 1920, height: 1080 }] };
+const screens = { output: false, stage: false, displays: [{ id: 1, label: "Built-in display", primary: true, internal: true, width: 1536, height: 864, scale: 1.25, pixelsWide: 1920, pixelsHigh: 1080, hz: 60, colorDepth: 24 }, { id: 2, label: "EPSON Projector", primary: false, width: 1920, height: 1080, scale: 1, pixelsWide: 1920, pixelsHigh: 1080, hz: 60, colorDepth: 24 }] };
 const sub = (set) => (cb) => { set.add(cb); return () => set.delete(cb); };
 const id = () => Math.random().toString(36).slice(2, 10);
 
@@ -42,6 +42,7 @@ window.scc = {
   ai: { status: async () => ({ hasKey: false, secure: true }), setKey: async () => ({ ok: true }), tidy: async (t) => ({ text: t, ai: false }), scriptures: async () => ({ items: [{ ref: "Jeremiah 29:11", why: "About hope" }], ai: false }), sermon: async (t) => ({ slides: t.split("\n").filter(Boolean).map((x) => ({ kind: "text", text: x })), ai: false }) },
   updates: { check: async () => ({ status: "current", message: "You have the latest version." }), get: async () => ({ status: "idle" }), install: async () => true, onStatus: () => () => {} },
   server: { info: async () => ({ ok: true, port: 4747, pin: db.settings.remotePin, addresses: ["192.168.1.20"], clients: 0 }), newPin: async () => "4321" },
-  app: { info: async () => ({ version: "0.1.0", platform: "browser" }), open: async (u) => window.open(u, "_blank"), openData: async () => true },
+  app: { info: async () => ({ version: "0.1.0", platform: "browser" }), system: async () => ({ os: "Windows 10.0.22631", cpu: "Intel Core i5-8250U", cores: 8, memoryGB: 8, gpu: [{ active: true, name: "Intel UHD Graphics 620" }], videoDecode: "enabled" }), open: async (u) => window.open(u, "_blank"), openData: async () => true },
+  beta: { feedback: async () => true },
   onMenu: () => () => {},
 };

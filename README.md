@@ -3,7 +3,7 @@
 Free, open-source presentation software for churches — songs, scripture, media, stage screens, phone remote and livestream output.
 Created by **AOG Sandton City Church**. MIT licensed: free to use, share and improve.
 
-**Download:** [latest release](https://github.com/aogsccmedia-dot/scc-presenter/releases/latest) — Windows (`SCC-Presenter-Setup.exe`) and Mac (`SCC-Presenter.dmg`). Laptops and desktops only.
+**Beta:** join at [aogsccyouth.com/presenter](https://aogsccyouth.com/presenter) — first 20 testers, until 31 December 2026. Full release 31 January 2027. Windows and Mac laptops/desktops only.
 
 ## Features
 - **Songs** — paste lyrics and get clean slides. `[Verse 1]`, `[Chorus]` labels (or none — repeats are spotted automatically). Import from FreeShow (`.show`), OpenLP / OpenLyrics (`.xml`) and text.
