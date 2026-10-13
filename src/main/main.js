@@ -449,6 +449,8 @@ function registerIpc() {
 
   handle("ai:status", () => ai.getStatus());
   handle("ai:setKey", (key) => ai.setKey(key));
+  handle("ai:config", (patch) => ai.setConfig(patch));
+  handle("ai:test", () => ai.test());
   handle("ai:tidy", (text) => ai.tidyLyrics(text));
   handle("ai:scriptures", (topic) => ai.scripturesFor(topic));
   handle("ai:sermon", (notes) => ai.sermonSlides(notes));
@@ -456,6 +458,7 @@ function registerIpc() {
   handle("updates:check", () => updates.check());
   handle("updates:get", () => updates.get());
   handle("updates:install", () => updates.install());
+  handle("updates:ring", (r) => updates.ring(r === "canary" ? "canary" : "stable"));
 
   handle("server:info", () => {
     const s = store.read("settings");

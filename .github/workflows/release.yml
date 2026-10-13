@@ -109,5 +109,15 @@ jobs:
           names=$(gh release view "$TAG" --json assets --jq '.assets[].name')
           echo "$names"
           for f in SCC-Presenter-Setup.exe latest.yml SCC-Presenter.dmg; do echo "$names" | grep -qx "$f" || { echo "Missing $f"; exit 1; }; done
+          # Canary: start the new version on 10% of computers. rollout.yml widens it to 50% and then 100%
+          # while nobody reports a blocking problem (an open issue labelled "release-blocker").
+          mkdir -p ring && cd ring
+          for f in latest.yml latest-mac.yml; do
+            gh release download "$TAG" --pattern "$f" --clobber
+            sed -i '/^stagingPercentage:/d' "$f" && echo "stagingPercentage: 10" >> "$f"
+          done
+          gh release upload "$TAG" latest.yml latest-mac.yml --clobber
+          cd ..
           PRE=""; case "$TAG" in *-*|v0.*) PRE="--prerelease";; esac
           gh release edit "$TAG" --draft=false $PRE
+          echo "::notice title=Canary::$TAG is out to 10% of computers. rollout.yml widens it."

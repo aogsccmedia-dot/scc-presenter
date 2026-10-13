@@ -1,5 +1,11 @@
-// AI helpers. With the church's own Claude API key (kept encrypted on this computer) the results are smarter;
-// without a key every feature still works using built-in rules, so nothing breaks offline.
+// AI helpers. Choose where the thinking happens:
+//   - Built-in rules (default): no AI, works offline.
+//   - Open-source model on this computer: Ollama or LM Studio running Llama, Mistral, Qwen, Gemma… Free and private:
+//     nothing leaves the computer.
+//   - Cloudflare Workers AI: open-weight models on the church's own Cloudflare account (account ID + API token).
+//   - Claude: the church's own Anthropic API key.
+// Keys and tokens are kept encrypted on this computer. If the chosen AI can't answer, the built-in rules take over,
+// so nothing breaks offline.
 import fs from "node:fs";
 import path from "node:path";
 import { parseLyrics, songToText, dedupeSections } from "../shared/lyrics.js";
@@ -32,8 +38,32 @@ const TOPICS = {
 };
 const SYNONYMS = { anxiety: "peace", worry: "peace", afraid: "fear", courage: "fear", power: "strength", weak: "strength", mercy: "grace", saved: "salvation", gospel: "salvation", thanks: "thanksgiving", praise: "worship", young: "youth", marriage: "family", parents: "family", sick: "healing", tithe: "giving", offering: "giving", spirit: "holy_spirit", direction: "guidance", wisdom: "guidance", calling: "purpose", happiness: "joy", trust: "faith", believe: "faith" };
 
+export const PROVIDERS = ["builtin", "local", "cloudflare", "claude"];
+const DEFAULTS = { provider: null, localUrl: "http://localhost:11434", localModel: "llama3.2", cfAccount: "", cfModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" };
+
 export function createAI(dir, safeStorage) {
   const keyFile = path.join(dir, "ai-key.bin");
+  const cfFile = path.join(dir, "ai-cf-token.bin");
+  const cfgFile = path.join(dir, "ai-config.json");
+  const readCfg = () => { try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(cfgFile, "utf8")) }; } catch { return { ...DEFAULTS }; } };
+  const readSecret = (file) => { try { const b = fs.readFileSync(file); return canEncrypt() ? safeStorage.decryptString(b) : null; } catch { return null; } };
+  /** The provider in use: what the person chose, or Claude if they saved a Claude key before providers existed. */
+  const provider = () => { const c = readCfg(); return PROVIDERS.includes(c.provider) ? c.provider : (getKey() ? "claude" : "builtin"); };
+  function setConfig(patch = {}) {
+    const c = { ...readCfg() };
+    if (patch.provider && PROVIDERS.includes(patch.provider)) c.provider = patch.provider;
+    for (const k of ["localUrl", "localModel", "cfAccount", "cfModel"]) if (typeof patch[k] === "string") c[k] = patch[k].trim().slice(0, 300);
+    if (typeof patch.cfToken === "string") {
+      if (!patch.cfToken) { try { fs.unlinkSync(cfFile); } catch { /* none */ } }
+      else { if (!canEncrypt()) throw new Error("This computer can't store the token securely, so it wasn't saved."); fs.writeFileSync(cfFile, safeStorage.encryptString(patch.cfToken.trim())); }
+    }
+    fs.writeFileSync(cfgFile, JSON.stringify({ ...c, cfToken: undefined }, null, 2));
+    return status();
+  }
+  function status() {
+    const c = readCfg();
+    return { provider: provider(), hasKey: !!getKey(), hasCfToken: !!readSecret(cfFile), secure: !!canEncrypt(), localUrl: c.localUrl, localModel: c.localModel, cfAccount: c.cfAccount, cfModel: c.cfModel };
+  }
   const canEncrypt = () => { try { return safeStorage?.isEncryptionAvailable?.(); } catch { return false; } };
   function getKey() {
     try {
@@ -48,7 +78,41 @@ export function createAI(dir, safeStorage) {
     return { ok: true, hasKey: true };
   }
 
+  // Open-source models on this computer: Ollama's API first, then the OpenAI-style API that LM Studio and others use.
+  async function askLocal(system, user, maxTokens) {
+    const c = readCfg(), base = c.localUrl.replace(/\/+$/, "");
+    const messages = [{ role: "system", content: system }, { role: "user", content: user }];
+    try {
+      const r = await fetch(`${base}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(120000),
+        body: JSON.stringify({ model: c.localModel, messages, stream: false, options: { num_predict: maxTokens, temperature: 0.3 } }) });
+      if (r.ok) { const d = await r.json(); const t = d?.message?.content; if (t) return String(t).trim(); }
+    } catch { /* try the OpenAI-style API */ }
+    try {
+      const r = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(120000),
+        body: JSON.stringify({ model: c.localModel, messages, max_tokens: maxTokens, temperature: 0.3 }) });
+      if (r.ok) { const d = await r.json(); const t = d?.choices?.[0]?.message?.content; if (t) return String(t).trim(); }
+    } catch { /* not running */ }
+    return null;
+  }
+  async function askCloudflare(system, user, maxTokens) {
+    const c = readCfg(), token = readSecret(cfFile);
+    if (!c.cfAccount || !token) return null;
+    try {
+      const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(c.cfAccount)}/ai/run/${c.cfModel}`, {
+        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, signal: AbortSignal.timeout(60000),
+        body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content: user }], max_tokens: maxTokens, temperature: 0.3 }) });
+      if (!r.ok) return null;
+      const d = await r.json();
+      const t = d?.result?.response;
+      return t ? (typeof t === "string" ? t : JSON.stringify(t)).trim() : null;
+    } catch { return null; }
+  }
+
   async function ask(system, user, maxTokens = 2000) {
+    const p = provider();
+    if (p === "builtin") return null;
+    if (p === "local") return askLocal(system, user, maxTokens);
+    if (p === "cloudflare") return askCloudflare(system, user, maxTokens);
     const key = getKey();
     if (!key) return null;
     try {
@@ -95,7 +159,17 @@ export function createAI(dir, safeStorage) {
     return { slides: sermonLocally(notes), ai: false };
   }
 
-  return { getStatus: () => ({ hasKey: !!getKey(), secure: !!canEncrypt() }), setKey, tidyLyrics, scripturesFor, sermonSlides };
+  /** "Test" button: one tiny question to the chosen AI. */
+  async function test() {
+    const p = provider();
+    if (p === "builtin") return { ok: true, provider: p, message: "Using built-in rules. No AI needed." };
+    const t0 = Date.now();
+    const out = await ask("Reply with exactly: ready", "Are you ready?", 20);
+    return out ? { ok: true, provider: p, message: `Connected in ${((Date.now() - t0) / 1000).toFixed(1)} s.` }
+      : { ok: false, provider: p, message: p === "local" ? "Couldn't reach the model. Is Ollama (or LM Studio) running, and is the model downloaded?" : p === "cloudflare" ? "Cloudflare didn't answer. Check the account ID, token (Workers AI permission) and model." : "Claude didn't answer. Check the key." };
+  }
+
+  return { getStatus: status, setKey, setConfig, test, tidyLyrics, scripturesFor, sermonSlides };
 }
 
 // ── Built-in fallbacks (also used by the tests) ─────────────────────────────

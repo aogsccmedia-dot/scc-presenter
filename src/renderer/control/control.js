@@ -782,14 +782,17 @@ export async function applyModes() {
     light = (sys.cores && sys.cores <= 4) || (sys.memoryGB && sys.memoryGB <= 4.5);
   }
   document.body.classList.toggle("light", !!light);
+  // Look & feel: church colours (white with soft baby blue, lilac and pink, black and gold like the logo) or dark.
+  document.body.dataset.appearance = S.settings.appearance === "dark" ? "dark" : "church";
+  document.body.dataset.accent = ["gold", "lilac", "blue", "pink"].includes(S.settings.accent) ? S.settings.accent : "gold";
+  document.documentElement.style.zoom = String((Number(S.settings.uiScale) || 100) / 100);
   if (!!S.live.calm !== !!light) { S.live.calm = !!light; scc.live.set({ calm: !!light }); }
 }
-export const BETA_END = new Date("2027-01-01T00:00:00+02:00");
+export const BETA_END = new Date("2099-01-01T00:00:00+02:00");   // the beta opens 1 Feb 2027; no end date set yet
 function renderBeta() {
   const chip = $("btnFeedback"); if (!chip) return;
   const ended = Date.now() >= BETA_END.getTime();
-  chip.title = ended ? "The beta has ended — the full release arrives on 31 January 2027" : "Tell us what works and what doesn't";
-  if (ended && !S.betaWarned) { S.betaWarned = true; toast("Thank you for testing! The beta ended on 31 December 2026. The full SCC Presenter arrives on 31 January 2027.", "info", 9000); }
+  chip.title = ended ? "Thank you for testing!" : "Tell us what works and what doesn't";
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────────────────────

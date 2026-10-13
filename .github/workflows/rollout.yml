@@ -1,0 +1,44 @@
+name: Rollout
+# Staged rollout (canary) for desktop updates. A new release starts at 10% of computers (see release.yml).
+# Every day at 06:00 SAST this widens the newest release: 10% → 50% → 100%, as long as the release is at least a day
+# old at that step and there is no open issue labelled "release-blocker". With a blocker open, it pauses (or pulls
+# the rollout back to 0% so nobody new gets it). You can also run it by hand and pick a percentage.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      percentage:
+        description: "Set the newest release to this percentage of computers (0 pauses it, 100 is everyone)"
+        required: false
+        type: choice
+        options: ["", "0", "10", "25", "50", "100"]
+permissions:
+  contents: write
+  issues: read
+concurrency: release
+jobs:
+  widen:
+    runs-on: ubuntu-latest
+    env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", GH_REPO: "${{ github.repository }}" }
+    steps:
+      - name: Widen, hold or pull back
+        shell: bash
+        run: |
+          TAG=$(gh release list --limit 1 --exclude-drafts --json tagName --jq '.[0].tagName')
+          [ -n "$TAG" ] || { echo "No releases yet"; exit 0; }
+          mkdir ring && cd ring
+          gh release download "$TAG" --pattern latest.yml --pattern latest-mac.yml
+          NOW=$(grep -oE '^stagingPercentage: *[0-9]+' latest.yml | grep -oE '[0-9]+' || echo 100)
+          BLOCKERS=$(gh issue list --label release-blocker --state open --json number --jq 'length' 2>/dev/null || echo 0)
+          WANT="${{ github.event.inputs.percentage }}"
+          if [ -z "$WANT" ]; then
+            if [ "$BLOCKERS" -gt 0 ]; then echo "::warning title=Rollout paused::$BLOCKERS release-blocker issue(s) open. $TAG stays at $NOW%."; exit 0; fi
+            case "$NOW" in 0) WANT=0;; 10|25) WANT=50;; 50) WANT=100;; *) echo "$TAG already reaches everyone"; exit 0;; esac
+          fi
+          for f in latest.yml latest-mac.yml; do
+            sed -i '/^stagingPercentage:/d' "$f"
+            [ "$WANT" = "100" ] || echo "stagingPercentage: $WANT" >> "$f"
+          done
+          gh release upload "$TAG" latest.yml latest-mac.yml --clobber
+          echo "::notice title=Rollout::$TAG now reaches $WANT% of computers (was $NOW%)."

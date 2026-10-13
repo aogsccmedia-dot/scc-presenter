@@ -1,10 +1,16 @@
 **SCC Presenter — Beta** · free, open-source church presentation software. Created by AOG Sandton City Church.
 
-The beta is open to the first 20 testers who join at **aogsccyouth.com/presenter** (until 31 December 2026). Please send feedback from the app (top bar → Feedback). Full release: 31 January 2027.
+The beta opens on **1 February 2027** for the first 20 testers who reserve a place at **aogsccyouth.com/presenter**. Please send feedback from the app (top bar → Feedback).
 
 ### Download
 - **Windows 10/11:** `SCC-Presenter-Setup.exe` — double-click to install. If Windows shows “Windows protected your PC”, click **More info → Run anyway** (the app isn't code-signed yet).
 - **Mac (Apple Silicon and Intel):** `SCC-Presenter.dmg` — open it and drag SCC Presenter into Applications. The first time, Control-click the app → **Open** (or System Settings → Privacy & Security → **Open Anyway**).
+
+### New in 0.3
+- **Church colours**: a light look with the website's soft baby blue, lilac and pink, and the logo's black and gold. Prefer dark for the booth? Settings → General → Look.
+- **Accent colour** (gold, lilac, baby blue or pink) and **button and text size** (90% to 125%)
+- **Open-source AI on your own computer**: use Llama, Mistral, Qwen or Gemma through Ollama or LM Studio, free and private. Or Cloudflare Workers AI, or Claude. Settings → AI → Test connection.
+- **Release rings**: new versions reach 10% of computers first, then half, then everyone. Choose **Early** in Settings → Updates to get them first.
 
 ### New in 0.2
 - **Several screens at once**, each with its own content: full slides, words on black or green for keying, fill + key for linear keying, visuals only, stage screen

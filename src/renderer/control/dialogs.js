@@ -151,6 +151,9 @@ export async function openSettings(startPane = "general") {
   const set = async (patch) => { S.settings = await scc.lib.setSettings(patch); };
   const panes = {
     general: () => h("div.pane",
+      h("label.field", h("span", "Look"), sel([["church", "Church colours (light)"], ["dark", "Dark — for dark rooms and booths"]], S.settings.appearance === "dark" ? "dark" : "church", async (v) => { await set({ appearance: v }); applyModes(); })),
+      h("label.field", h("span", "Accent colour"), sel([["gold", "Gold"], ["lilac", "Lilac"], ["blue", "Baby blue"], ["pink", "Pink"]], S.settings.accent || "gold", async (v) => { await set({ accent: v }); applyModes(); })),
+      h("label.field", h("span", "Size of buttons and text"), sel([[90, "Smaller (90%)"], [100, "Normal (100%)"], [110, "Bigger (110%)"], [125, "Biggest (125%)"]], S.settings.uiScale || 100, async (v) => { await set({ uiScale: Number(v) }); applyModes(); })),
       checkbox("Easy mode — bigger text and buttons", !!S.settings.easy, async (v) => { await set({ easy: v }); applyModes(); }),
       h("label.field", h("span", "Performance"), sel([["auto", "Automatic (recommended)"], ["light", "Light — for older computers (no animations)"], ["full", "Full — all animations"]], S.settings.performance || "auto", async (v) => { await set({ performance: v }); applyModes(); }),
         h("small", "Light mode keeps slides and video smooth on older laptops.")),
@@ -162,13 +165,43 @@ export async function openSettings(startPane = "general") {
     screens: () => outputsEditor(),
     looks: () => themeEditor(set),
     ai: () => {
-      const key = h("input.input", { type: "password", placeholder: aiStatus.hasKey ? "•••••••• (saved)" : "sk-ant-…", autocomplete: "off" });
-      return h("div.pane",
-        h("div.callout.gold", h("b", "AI helpers"), h("br"), "Tidy pasted lyrics, suggest Bible verses for a topic and turn sermon notes into slides. Everything works without a key using built-in rules; with your church's own Claude API key, results are smarter."),
-        h("label.field", h("span", "Claude API key"), key, h("small", aiStatus.secure === false ? "This computer can't store keys securely, so AI keys are turned off here." : "Stored encrypted on this computer only. Get a key at console.anthropic.com.")),
-        h("div", { style: { display: "flex", gap: "8px" } },
-          h("button.btn.small.primary", { onclick: async () => { if (!key.value.trim()) return; try { await scc.ai.setKey(key.value.trim()); key.value = ""; key.placeholder = "•••••••• (saved)"; toast("AI key saved", "ok"); } catch (e) { toast(e.message, "error"); } } }, "Save key"),
-          aiStatus.hasKey ? h("button.btn.small.danger", { onclick: async () => { await scc.ai.setKey(""); key.placeholder = "sk-ant-…"; toast("AI key removed", "ok"); } }, "Remove key") : null));
+      let st = aiStatus;
+      const box = h("div");
+      const result = h("div.callout", { hidden: true });
+      const draw = () => {
+        const key = h("input.input", { type: "password", placeholder: st.hasKey ? "•••••••• (saved)" : "sk-ant-…", autocomplete: "off" });
+        const url = h("input.input", { value: st.localUrl || "http://localhost:11434" });
+        const model = h("input.input", { value: st.localModel || "llama3.2", placeholder: "llama3.2, mistral, qwen2.5, gemma3…" });
+        const acct = h("input.input", { value: st.cfAccount || "", placeholder: "32-character account ID" });
+        const tok = h("input.input", { type: "password", placeholder: st.hasCfToken ? "•••••••• (saved)" : "API token with Workers AI permission", autocomplete: "off" });
+        const cfm = h("input.input", { value: st.cfModel || "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const choose = async (v) => { st = await scc.ai.config({ provider: v }); draw(); };
+        const opt = (v, title, text) => h("label.ai-opt" + (st.provider === v ? ".on" : ""), h("input", { type: "radio", name: "aiprov", checked: st.provider === v, onchange: () => choose(v) }), h("span", h("b", title), h("small", text)));
+        const save = async (patch, msg) => { try { st = await scc.ai.config(patch); toast(msg, "ok"); draw(); } catch (e) { toast(e.message, "error"); } };
+        box.replaceChildren(
+          h("div.callout.gold", h("b", "AI helpers"), h("br"), "Tidy pasted lyrics, find Bible verses for a topic and turn sermon notes into slides. Pick where the AI runs. If it can't answer, built-in rules take over."),
+          h("div.ai-opts",
+            opt("builtin", "Built-in rules", "No AI. Works offline. Nothing to set up."),
+            opt("local", "Open-source model on this computer", "Free and private: Llama, Mistral, Qwen or Gemma through Ollama or LM Studio."),
+            opt("cloudflare", "Cloudflare Workers AI", "Open-weight models on your church's Cloudflare account."),
+            opt("claude", "Claude", "Your church's own Anthropic API key.")),
+          st.provider === "local" ? h("div.pane",
+            h("small.hint", "Install Ollama from ollama.com, then run “ollama pull llama3.2”. LM Studio works too: use its server address, e.g. http://localhost:1234."),
+            h("label.field", h("span", "Address"), url), h("label.field", h("span", "Model"), model),
+            h("button.btn.small.primary", { onclick: () => save({ localUrl: url.value, localModel: model.value }, "Saved") }, "Save")) : null,
+          st.provider === "cloudflare" ? h("div.pane",
+            h("label.field", h("span", "Account ID"), acct), h("label.field", h("span", "API token"), tok), h("label.field", h("span", "Model"), cfm),
+            h("button.btn.small.primary", { onclick: () => save({ cfAccount: acct.value, cfModel: cfm.value, ...(tok.value.trim() ? { cfToken: tok.value.trim() } : {}) }, "Saved") }, "Save")) : null,
+          st.provider === "claude" ? h("div.pane",
+            h("label.field", h("span", "Claude API key"), key, h("small", st.secure === false ? "This computer can't store keys securely, so AI keys are turned off here." : "Stored encrypted on this computer only. Get a key at console.anthropic.com.")),
+            h("div", { style: { display: "flex", gap: "8px" } },
+              h("button.btn.small.primary", { onclick: async () => { if (!key.value.trim()) return; try { await scc.ai.setKey(key.value.trim()); st = await scc.ai.status(); toast("AI key saved", "ok"); draw(); } catch (e) { toast(e.message, "error"); } } }, "Save key"),
+              st.hasKey ? h("button.btn.small.danger", { onclick: async () => { await scc.ai.setKey(""); st = await scc.ai.status(); toast("AI key removed", "ok"); draw(); } }, "Remove key") : null)) : null,
+          h("div", { style: { display: "flex", gap: "8px", alignItems: "center" } }, h("button.btn.small", { onclick: async (e) => { e.target.classList.add("busy"); const r = await scc.ai.test().catch(() => ({ ok: false, message: "Couldn't test right now." })); e.target.classList.remove("busy"); result.hidden = false; result.className = "callout" + (r.ok ? " ok" : " danger"); result.textContent = r.message; } }, "Test connection")),
+          result);
+      };
+      draw();
+      return h("div.pane", box);
     },
     network: () => h("div.pane",
       h("div.callout", server.ok ? `Running on port ${server.port}. Phones, OBS and other screens on the same network can connect (see Connect).` : `Not running: ${server.error || "unknown"}.`),
@@ -179,6 +212,8 @@ export async function openSettings(startPane = "general") {
       const btn = h("button.btn.small.primary", { onclick: async () => { btn.classList.add("busy"); const u = await scc.updates.check().catch(() => null); btn.classList.remove("busy"); status.textContent = u?.message || "Couldn't check right now."; if (u && (u.status === "available" || u.status === "ready")) act.hidden = false; } }, "Check for updates");
       const act = h("button.btn.small", { hidden: !(upd.status === "available" || upd.status === "ready"), onclick: () => scc.updates.install() }, upd.status === "ready" ? "Restart and install" : "Download update");
       return h("div.pane", h("div", h("b", `SCC Presenter ${info.version}`)), status, h("div", { style: { display: "flex", gap: "8px" } }, btn, act),
+        h("label.field", h("span", "Update ring"), sel([["stable", "Steady — get new versions once they've proven themselves (recommended)"], ["canary", "Early (canary) — get new versions first and help us catch problems"]], S.settings.updateRing || "stable", async (v) => { await set({ updateRing: v }); await scc.updates.ring?.(v); toast(v === "canary" ? "You'll get new versions first. Thank you!" : "You'll get new versions once they've proven themselves.", "ok"); }),
+          h("small", "New versions reach a small group first (10%), then half, then everyone, so a problem never reaches every church at once.")),
         h("small.hint", info.platform === "win32" ? "Windows updates download in the background and install when you restart." : "On Mac, new versions download from the release page. Open the .dmg and drag SCC Presenter into Applications to replace the old one."));
     },
     about: () => h("div.pane",
@@ -190,8 +225,8 @@ export async function openSettings(startPane = "general") {
   panes.beta = () => {
     const key = h("input.input", { value: S.settings.betaKey || "", placeholder: "SCC-XXXX-XXXX", autocomplete: "off" });
     return h("div.pane",
-      h("div.callout.gold", h("b", "Beta tester"), h("br"), `Thank you for testing SCC Presenter! The beta runs until 31 December 2026. The full release arrives on 31 January 2027.`),
-      h("label.field", h("span", "Your beta key"), key, h("small", "Shown on the download page after you joined the beta. It lets your feedback reach the team.")),
+      h("div.callout.gold", h("b", "Beta tester"), h("br"), `Thank you for testing SCC Presenter! The beta opens on 1 February 2027.`),
+      h("label.field", h("span", "Your beta key"), key, h("small", "Emailed to you when you reserved your beta place. It lets your feedback reach the team.")),
       h("div", { style: { display: "flex", gap: "8px" } },
         h("button.btn.small.primary", { onclick: async () => { await set({ betaKey: key.value.trim().toUpperCase() }); toast("Beta key saved", "ok"); } }, "Save key"),
         h("button.btn.small", { onclick: () => openFeedback() }, "Send feedback")));
@@ -373,7 +408,7 @@ export function openFeedback() {
   const rec = sel([["", "Choose…"], ["yes", "Yes"], ["maybe", "Maybe"], ["no", "Not yet"]], "", () => {});
   const key = h("input.input", { value: S.settings.betaKey || "", placeholder: "Your beta key, e.g. SCC-AB12-CD34" });
   const sysBox = h("input", { type: "checkbox", checked: true });
-  modal({ title: "Beta feedback", width: 640, body: ended ? h("div.callout", "The beta has ended. Thank you! The full release arrives on 31 January 2027.") : h("div", { style: { display: "grid", gap: "12px" } },
+  modal({ title: "Beta feedback", width: 640, body: ended ? h("div.callout", "Thank you for testing SCC Presenter!") : h("div", { style: { display: "grid", gap: "12px" } },
     h("div.hint", "Your answers go straight to the AOG Sandton City Church media team. Only beta testers can send feedback."),
     h("div.grid2", h("div.field", h("span", "Overall"), overall), h("div.field", h("span", "How easy is it to use?"), ease)),
     h("div.field", h("span", "What did you use?"), used),
