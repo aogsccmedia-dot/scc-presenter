@@ -3,6 +3,7 @@ import { createView } from "../shared/render.js";
 import { THEMES } from "../shared/themes.js";
 import { parseLyrics, dedupeSections, songSlides, songToText } from "../shared/lyrics.js";
 import { parseReference, formatReference, scriptureSlides } from "../shared/scripture.js";
+import { startTour } from "./tour.js";
 import { newId } from "../shared/importers.js";
 import { OUTPUT_MODES } from "../shared/modes.js";
 import { h, icon, toast, modal, debounce, plural } from "./ui.js";
@@ -426,26 +427,8 @@ export function openFeedback() {
     } }] });
 }
 
-// ── First-run guide ────────────────────────────────────────────────────────────────────────
-export function openGuide() {
-  const steps = [
-    ["monitor", "Welcome to SCC Presenter", "Show songs, Bible verses, pictures and videos on your projector or TV. This short guide takes 30 seconds."],
-    ["music", "1. Pick something on the left", "Songs, Bible, Media and Text are in the tabs at the bottom left. Click a song to see its slides in the middle."],
-    ["play", "2. Click a slide to show it", "The slide with the red border is on screen. Press → or Space for the next one. The big yellow Next button does the same."],
-    ["monitor", "3. Turn on the projector screen", "Press Output at the top. If a projector or TV is plugged in, the slides go there. Black, Clear and Logo are always one tap away."],
-    ["list", "4. Plan your service", "Press “Add to service” to build Sunday's order on the top left. Next then runs straight through the whole service."],
-  ];
-  let i = 0;
-  const body = h("div.guide");
-  const draw = () => {
-    const [ic, t, p] = steps[i];
-    body.replaceChildren(h("div.big-ic", icon(ic)), h("h3", t), h("p", p), h("div.dots", ...steps.map((_, k) => h(`i${k === i ? ".on" : ""}`))));
-    nextBtn.textContent = i === steps.length - 1 ? "Start presenting" : "Next";
-  };
-  const m = modal({ title: "Getting started", width: 520, body, actions: [{ label: "Skip" }, { label: "Next", kind: "primary", onClick: () => { if (i < steps.length - 1) { i++; draw(); return false; } } }] });
-  const nextBtn = m.el.querySelector("footer .primary");
-  draw();
-}
+// ── First-run guide: the spotlight tour
+export function openGuide() { startTour(); }
 
 
 // ── Screens: as many outputs as you have screens, each showing what it should ───────────────

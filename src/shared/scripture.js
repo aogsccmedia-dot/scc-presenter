@@ -15,6 +15,12 @@ export const BOOKS = [
   ["2 John", "2john 2jn 2jo 2jhn"], ["3 John", "3john 3jn 3jo 3jhn"], ["Jude", "jude jud jd"], ["Revelation", "rev re revelations"],
 ];
 
+/** Chapters in each book (Protestant canon, same order as BOOKS). */
+export const CHAPTERS = [50, 40, 27, 36, 34, 24, 21, 4, 31, 24, 22, 25, 29, 36, 10, 13, 10, 42, 150, 31, 12, 8, 66, 52, 5, 48, 12, 14, 3, 9, 1, 4, 7, 3, 3,
+  3, 2, 14, 4, 28, 16, 24, 21, 28, 16, 16, 13, 6, 6, 4, 4, 5, 3, 6, 4, 3, 1, 13, 5, 5, 3, 5, 1, 1, 1, 22];
+/** Short names for buttons: "Gen", "1 Sam", "Ps"… */
+export const SHORT = BOOKS.map(([, abbr]) => abbr.split(" ")[0].replace(/^(\d)/, "$1 ").replace(/(^|\s)([a-z])/, (_m, a, b) => a + b.toUpperCase()));
+
 const key = (s) => s.toLowerCase().replace(/^(i{1,3})\s+(?=[a-z])/, (_m, r) => String(r.length)).replace(/^(first|second|third)\s+/, (_m, w) => ({ first: "1", second: "2", third: "3" }[w])).replace(/[^a-z0-9]/g, "");
 const LOOKUP = new Map();
 BOOKS.forEach(([name, abbr], i) => { LOOKUP.set(key(name), i); for (const a of abbr.split(" ")) LOOKUP.set(a, i); });
@@ -36,6 +42,7 @@ export function parseReference(input) {
   const book = findBook(m[1]);
   if (book == null) return null;
   const chapter = Number(m[2]);
+  if (chapter < 1 || chapter > CHAPTERS[book]) return null;   // never ask for a chapter that doesn't exist
   let from = m[3] ? Number(m[3]) : null, to = from;
   if (m[4] && m[5]) return { book, name: BOOKS[book][0], chapter, from, to: Number(m[5]), toChapter: Number(m[4]) };   // John 3:16-4:2
   if (m[4]) { if (from == null) return { book, name: BOOKS[book][0], chapter, from: null, to: null, toChapter: Number(m[4]) }; to = Number(m[4]); }

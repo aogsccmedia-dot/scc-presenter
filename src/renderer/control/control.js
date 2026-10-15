@@ -2,9 +2,10 @@
 import { createView } from "../shared/render.js";
 import { THEMES } from "../shared/themes.js";
 import { songSlides } from "../shared/lyrics.js";
-import { scriptureSlides, parseReference, formatReference } from "../shared/scripture.js";
+import { scriptureSlides, parseReference, formatReference, findBook, BOOKS, CHAPTERS, SHORT } from "../shared/scripture.js";
 import { importFreeShow, importOpenLyrics, importPlainText, newId } from "../shared/importers.js";
 import { h, icon, toast, modal, modalOpen, confirmBox, askText, debounce, plural } from "./ui.js";
+import { initHints } from "./tour.js";
 import { openSongEditor, openTextEditor, openSettings, openConnect, openAI, openReceive, openShortcuts, openSetup, openFeedback, openGuide, openImport, onImportProgress } from "./dialogs.js";
 import { syncSound } from "./sound.js";
 import { MOTION } from "../shared/render.js";
@@ -415,44 +416,115 @@ function renderSongs(body) {
   draw();
 }
 
+// Bible: type a reference, or tap book → chapter → verses (with the words, so you pick the right ones).
+const BP = { testament: "nt", book: null, chapter: null, data: null, from: null, to: null, loading: false };
 function renderBible(body) {
-  const ref = h("input.input", { placeholder: "e.g. John 3:16-18 or Ps 23", value: S.bibleQuery || "", autofocus: true });
-  const tr = h("select", { "aria-label": "Translation", style: { width: "92px" } }, ...S.translations.map((t) => h("option", { value: t.id, title: t.name }, t.id.toUpperCase())));
+  const tr = h("select.tr-sel", { "aria-label": "Translation", title: "Translation" }, ...S.translations.map((t) => h("option", { value: t.id, title: t.name }, t.id.toUpperCase())));
   tr.value = S.settings.translation || "kjv";
+  tr.onchange = async () => { S.settings = await scc.lib.setSettings({ translation: tr.value }); if (BP.chapter) loadChapter(); };
+  // 1. Typing, with a live check and book suggestions
+  const ref = h("input.input", { placeholder: "Type John 3:16 or pick below", value: S.bibleQuery || "", autocomplete: "off", spellcheck: false });
+  const hint = h("div.bp-hint");
   const go = h("button.btn.primary", { type: "submit" }, "Show");
-  const form = h("form.lib-section", { onsubmit: async (e) => {
+  const check = () => {
+    const q = ref.value.trim(), r = q ? parseReference(q) : null;
+    hint.replaceChildren();
+    if (!q) return;
+    if (r) { hint.append(h("span.ok", "✓ ", formatReference(r))); return; }
+    const word = q.replace(/\s*\d.*$/, "");
+    const books = BOOKS.map(([n], i) => [n, i]).filter(([n]) => n.toLowerCase().replace(/\s/g, "").startsWith(word.toLowerCase().replace(/\s/g, ""))).slice(0, 5);
+    if (books.length && !/\d\s*$/.test(q)) hint.append(...books.map(([n, i]) => h("button.chip", { type: "button", onclick: () => { ref.value = `${n} `; ref.focus(); openBook(i); check(); } }, n)));
+    else hint.append(h("span.muted", findBook(word) != null ? `${BOOKS[findBook(word)][0]} has ${CHAPTERS[findBook(word)]} chapters` : "Keep typing… e.g. Romans 8:28"));
+  };
+  ref.addEventListener("input", check);
+  const form = h("form.lib-section.bp-type", { onsubmit: async (e) => {
     e.preventDefault();
-    const q = ref.value.trim(); if (!q) return;
-    S.bibleQuery = q;
-    go.classList.add("busy"); go.disabled = true;
-    try {
-      const r = await scc.bible.lookup(q, tr.value);
-      const slides = scriptureSlides(r.ref, r.verses, { translation: r.translation });
-      const item = scriptureItem({ reference: r.reference, translation: r.translation, slides });
-      select(item);
-      remember(r.reference);
-      if (tr.value !== S.settings.translation) S.settings = await scc.lib.setSettings({ translation: tr.value });
-    } catch (err) { toast(err.message, "error"); }
-    finally { go.classList.remove("busy"); go.disabled = false; }
-  } }, h("h4", "Find a passage"), h("div", { style: { display: "flex", gap: "6px" } }, ref, tr), go);
+    const r = parseReference(ref.value.trim());
+    if (!r) { toast("Try a reference like John 3:16 or Psalm 23.", "error"); return; }
+    S.bibleQuery = ref.value.trim();
+    await showPassage(formatReference(r), go);
+  } }, h("div.bp-row", ref, tr, go), hint);
+
+  // 2. Picking
+  const crumbs = h("nav.bp-crumbs"), pane = h("div.bp-pane"), bar = h("div.bp-bar");
+  const draw = () => {
+    crumbs.replaceChildren(...[
+      h("button", { type: "button", class: BP.book == null ? "on" : "", onclick: () => { BP.book = null; BP.chapter = null; draw(); } }, "Books"),
+      BP.book != null ? h("button", { type: "button", class: BP.chapter == null ? "on" : "", onclick: () => { BP.chapter = null; draw(); } }, BOOKS[BP.book][0]) : null,
+      BP.chapter != null ? h("button.on", { type: "button" }, `Chapter ${BP.chapter}`) : null].filter(Boolean));
+    bar.replaceChildren(); bar.hidden = true;
+    if (BP.book == null) {
+      const seg = h("div.bp-seg", ...[["ot", "Old Testament"], ["nt", "New Testament"]].map(([k, l]) => h("button", { type: "button", class: BP.testament === k ? "on" : "", onclick: () => { BP.testament = k; draw(); } }, l)));
+      const range = BP.testament === "ot" ? [0, 39] : [39, 66];
+      pane.replaceChildren(seg, h("div.bp-books", ...BOOKS.slice(...range).map(([n], k) => { const i = range[0] + k; return h("button", { type: "button", title: n, onclick: () => openBook(i) }, SHORT[i]); })));
+    } else if (BP.chapter == null) {
+      pane.replaceChildren(h("div.bp-nums", ...Array.from({ length: CHAPTERS[BP.book] }, (_, i) => h("button", { type: "button", onclick: () => { BP.chapter = i + 1; BP.from = BP.to = null; loadChapter(); } }, i + 1))));
+      if (CHAPTERS[BP.book] === 1) { BP.chapter = 1; loadChapter(); }
+    } else if (BP.loading) pane.replaceChildren(h("div.hint", "Opening ", BOOKS[BP.book][0], " ", BP.chapter, "…"));
+    else if (!BP.data) pane.replaceChildren(h("div.hint", "Couldn't open this chapter. ", h("button.link", { type: "button", onclick: loadChapter }, "Try again")));
+    else {
+      const inSel = (v) => BP.from != null && v >= BP.from && v <= (BP.to ?? BP.from);
+      pane.replaceChildren(h("div.hint", "Tap a verse, then tap another to take the verses in between."),
+        h("div.bp-verses", ...BP.data.verses.map((v) => h(`button.bp-v${inSel(v.verse) ? ".on" : ""}`, { type: "button", onclick: () => pickVerse(v.verse) }, h("b", v.verse), h("span", v.text)))));
+      const label = selLabel();
+      bar.hidden = false;
+      bar.replaceChildren(...[
+        h("button.btn.primary", { type: "button", onclick: (e) => showPassage(label, e.currentTarget) }, BP.from != null ? `Show ${label}` : `Show all of ${label}`),
+        h("button.btn", { type: "button", title: "Add to service", onclick: async () => { const it = await passageItem(label); if (it) addToShow(it); } }, icon("plus"), "Service"),
+        BP.chapter > 1 ? h("button.icon-btn", { type: "button", title: "Previous chapter", onclick: () => { BP.chapter--; BP.from = BP.to = null; loadChapter(); } }, icon("chev", "flip")) : null,
+        BP.chapter < CHAPTERS[BP.book] ? h("button.icon-btn", { type: "button", title: "Next chapter", onclick: () => { BP.chapter++; BP.from = BP.to = null; loadChapter(); } }, icon("chev")) : null].filter(Boolean));
+    }
+  };
+  const selLabel = () => `${BOOKS[BP.book][0]} ${BP.chapter}${BP.from != null ? `:${BP.from}${BP.to != null && BP.to !== BP.from ? `-${BP.to}` : ""}` : ""}`;
+  const pickVerse = (n) => {
+    if (BP.from == null || BP.to != null && BP.to !== BP.from) { BP.from = n; BP.to = null; }
+    else if (n === BP.from) { BP.from = null; BP.to = null; }
+    else { BP.to = Math.max(n, BP.from); BP.from = Math.min(n, BP.from); }
+    ref.value = selLabel(); check(); draw();
+  };
+  function openBook(i) { BP.book = i; BP.chapter = null; BP.data = null; BP.testament = i < 39 ? "ot" : "nt"; draw(); }
+  async function loadChapter() {
+    BP.loading = true; BP.data = null; draw();
+    try { BP.data = await scc.bible.lookup(`${BOOKS[BP.book][0]} ${BP.chapter}`, tr.value); }
+    catch (err) { toast(err.message, "error"); }
+    BP.loading = false; ref.value = selLabel(); check(); draw();
+  }
+  /** Slides for a reference: from the open chapter when it's there (instant), otherwise from the Bible service. */
+  async function passageItem(label) {
+    const r = parseReference(label); if (!r) return null;
+    let res;
+    if (BP.data && BP.book === r.book && BP.chapter === r.chapter && !r.toChapter) {
+      const verses = BP.data.verses.filter((v) => r.from == null || (v.verse >= r.from && v.verse <= (r.to ?? r.from)));
+      res = { ref: r, reference: formatReference(r), translation: BP.data.translation, verses };
+    } else res = await scc.bible.lookup(label, tr.value);
+    const slides = scriptureSlides(res.ref, res.verses, { translation: res.translation });
+    return scriptureItem({ reference: res.reference, translation: res.translation, slides });
+  }
+  async function showPassage(label, btn) {
+    btn?.classList.add("busy"); if (btn) btn.disabled = true;
+    try { const item = await passageItem(label); if (item) { select(item); remember(item.ref); } }
+    catch (err) { toast(err.message, "error"); }
+    finally { btn?.classList.remove("busy"); if (btn) btn.disabled = false; }
+  }
+  // 3. Recent and by topic (tucked away)
   const recent = (S.settings.recentRefs || []).slice(0, 8);
   const topic = h("input.input", { placeholder: "A topic, e.g. hope in hard times" });
   const topicBtn = h("button.btn", { type: "submit" }, icon("spark"), "Suggest verses");
   const results = h("div.results");
-  const topicForm = h("form.lib-section", { onsubmit: async (e) => {
+  const topicForm = h("form", { style: { display: "grid", gap: "8px" }, onsubmit: async (e) => {
     e.preventDefault(); if (!topic.value.trim()) return;
     topicBtn.classList.add("busy");
     try {
       const r = await scc.ai.scriptures(topic.value);
-      results.replaceChildren(...r.items.map((x) => h("button.result", { type: "button", onclick: () => { ref.value = x.ref; form.requestSubmit(); } }, h("div.t", h("b", x.ref), h("span", x.why)), icon("chev"))));
-      if (!r.ai) results.append(h("div.hint", "Built-in suggestions. Add an AI key in Settings for smarter results."));
+      results.replaceChildren(...r.items.map((x) => h("button.result", { type: "button", onclick: () => { ref.value = x.ref; check(); showPassage(x.ref); } }, h("div.t", h("b", x.ref), h("span", x.why)), icon("chev"))));
     } catch (err) { toast(err.message, "error"); }
     finally { topicBtn.classList.remove("busy"); }
-  } }, h("h4", "By topic"), topic, topicBtn, results);
+  } }, topic, topicBtn, results);
   body.append(...[form,
-    recent.length ? h("div.lib-section", h("h4", "Recent"), h("div.chips", ...recent.map((r) => h("button.chip", { type: "button", onclick: () => { ref.value = r; form.requestSubmit(); } }, r)))) : null,
-    topicForm,
-    h("div.lib-section", h("div.hint", "Public-domain translations (KJV, WEB, ASV, BBE, YLT). Passages you've opened work offline."))].filter(Boolean));
+    recent.length ? h("div.lib-section", h("div.chips", ...recent.map((r) => h("button.chip", { type: "button", onclick: () => { ref.value = r; check(); showPassage(r); } }, r)))) : null,
+    h("div.lib-section.bp", crumbs, pane, bar),
+    h("details.lib-section.bp-topic", h("summary", icon("spark"), "Find verses by topic"), topicForm)].filter(Boolean));
+  check(); draw();
 }
 
 function renderMedia(body) {
@@ -815,6 +887,7 @@ async function start() {
   $("btnNext").addEventListener("click", () => step(1));
   $("btnPrev").addEventListener("click", () => step(-1));
   $("btnSettings").addEventListener("click", () => openSettings());
+  $("btnHelp")?.addEventListener("click", () => openGuide());
   $("setupChip").addEventListener("click", () => openSetup());
   $("btnLive").addEventListener("click", () => scc.desk.open());
   $("importChip").addEventListener("click", () => openImport());
@@ -822,8 +895,8 @@ async function start() {
   scc.importer.get().then((p) => onImportProgress(p)).catch(() => {});
   scc.desk.onChange((open) => $("btnLive").classList.toggle("on", !!open));
   scc.atem.onState?.((a) => $("btnLive").classList.toggle("live", a?.streaming?.state === "streaming"));
-  $("btnFeedback").addEventListener("click", () => openFeedback());
-  $("btnConnect").addEventListener("click", () => openConnect());
+  $("btnFeedback")?.addEventListener("click", () => openFeedback());
+  $("btnConnect")?.addEventListener("click", () => openConnect());
   $("btnAI").addEventListener("click", () => openAI());
   $("btnNewShow").addEventListener("click", newShow);
   $("btnShowMenu").addEventListener("click", showMenu);
@@ -843,7 +916,8 @@ async function start() {
   scc.screens.onChange(() => refreshDevices());
   renderAll(); renderCenter(); tickTimer();
   document.body.classList.remove("booting");
-  if (!S.settings.welcomed) { S.settings = await scc.lib.setSettings({ welcomed: true }); openGuide(); }
+  initHints();
+  if (!S.settings.toured) { S.settings = await scc.lib.setSettings({ welcomed: true, toured: true }); setTimeout(() => openGuide(), 500); }
 }
 
 export function remember(ref) {
